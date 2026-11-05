@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using Terminal.Gui.Drivers;
 using Terminal.Gui.Drawing;
+using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
@@ -18,6 +20,7 @@ internal class LibraryListPane<T> : View where T : class
         Title = title;
         BorderStyle = LineStyle.Single;
         CanFocus = true;
+        KeyDownNotHandled += OnKeyDownNotHandled;
 
         _listView = new ListView
         {
@@ -66,8 +69,27 @@ internal class LibraryListPane<T> : View where T : class
         _listView.SelectedItem = _items.Count == 0 ? null : 0;
     }
 
+    public void SelectIndex(int index)
+    {
+        if (index < 0 || index >= _items.Count)
+        {
+            return;
+        }
+
+        _listView.SelectedItem = index;
+        _listView.EnsureSelectedItemVisible();
+    }
+
     public void FocusList()
     {
         _listView.SetFocus();
+    }
+
+    private void OnKeyDownNotHandled(object? sender, Key e)
+    {
+        if (e.KeyCode is KeyCode.CursorUp or KeyCode.CursorDown or KeyCode.CursorLeft or KeyCode.CursorRight)
+        {
+            e.Handled = true;
+        }
     }
 }

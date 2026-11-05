@@ -5,6 +5,9 @@ namespace Sub.NETUI.UI;
 
 internal sealed class StatusBar : View
 {
+    private const string HelpText =
+        "[Enter/Esc] Navegar  [0-9] Pista  [Ctrl+Espacio] Pausa  [Ctrl+S] Stop  [Ctrl+N/P] Canción  [Ctrl+Q] Salir";
+
     private readonly Label _statusLabel;
 
     public StatusBar()
@@ -15,15 +18,13 @@ internal sealed class StatusBar : View
             Y = 0,
             Width = Dim.Fill(),
             Height = 1,
-            Text = "Espacio Pausa  Ctrl+S Detener  N/P Siguiente/Anterior  Tab Panel  Ctrl+Q Salir"
+            Text = HelpText
         };
         Add(_statusLabel);
     }
 
     public void SetStatus(string? message)
     {
-        _statusLabel.Text = string.IsNullOrWhiteSpace(message)
-            ? "Espacio Pausa  Ctrl+S Detener  N/P Siguiente/Anterior  Tab Panel  Ctrl+Q Salir"
-            : message;
+        _statusLabel.Text = string.IsNullOrWhiteSpace(message) ? HelpText : message;
     }
 }

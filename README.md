@@ -32,11 +32,16 @@ Native AOT genera un ejecutable nativo para el runtime indicado en `-r`; usa el 
 
 ## Uso
 
-- Flechas: navegar artistas, álbumes y canciones.
+- Flechas: navegar artistas, álbumes y canciones; al llegar al inicio o al final, el foco permanece en el listado.
 - `Tab`: cambiar entre los paneles de artistas, álbumes y canciones.
+- `Enter` en artistas o álbumes: avanzar al panel siguiente; `Esc`: volver al panel anterior. Las flechas no cambian de panel.
 - `Enter` sobre una canción: reproducirla y continuar con las siguientes canciones del álbum.
-- `Espacio`: pausar o reanudar; `Ctrl+S`: detener.
-- `N` / `P`: siguiente / anterior; `Ctrl+Q`: salir.
+- Letras: saltar al primer artista, álbum o canción que empiece por esa letra (búsqueda incremental de `ListView`).
+- Dígitos en el panel de canciones: marcar la pista con ese número; se pueden teclear varios seguidos (por ejemplo `1` `2` para la pista 12) en menos de un segundo.
+- `Ctrl+Espacio`: pausar o reanudar; `Ctrl+S`: detener.
+- `Ctrl+N` / `Ctrl+P`: siguiente / anterior; `Ctrl+Q`: salir.
+
+Los atajos de reproducción usan `Ctrl` a propósito: las teclas sin modificador quedan libres para la navegación dentro de las listas.
 
 El reproductor muestra mensajes comprensibles si `mpv` falta o si no se puede iniciar. La barra de progreso consulta a `mpv` una vez por segundo y se desactiva al pausar o detener.
 
@@ -54,7 +59,7 @@ El reproductor muestra mensajes comprensibles si `mpv` falta o si no se puede in
 - Las llamadas de red y al reproductor se esperan fuera del hilo de UI. El resultado se aplica con `app.Invoke(...)`, que agenda el cambio en el hilo de la aplicación.
 - `Pos` describe la posición relativa a otras vistas y `Dim` el tamaño relativo al espacio disponible. Los paneles se componen como vistas hijas para que el layout pueda cambiar sin mezclarlo con la lógica Subsonic.
 - La navegación se observa mediante `ListView.ValueChanged`; las acciones confirmadas se enlazan a `Accepted`. `Accepting` es el evento cancelable previo a la aceptación y conviene reservarlo para validar o impedir una acción, no para ejecutar side effects.
-- El foco pertenece a las vistas que reciben entrada; `Tab` lo mueve explícitamente entre las listas. Las `SuperView` contenedoras también deben tener `CanFocus = true` para que Terminal.Gui pueda enfocar correctamente sus vistas descendientes. Los paneles son reutilizables y no contienen lógica de red.
+- El foco pertenece a las vistas que reciben entrada; `Tab` recorre las listas y `Enter`/`Esc` avanzan o retroceden entre ellas. Las `SuperView` contenedoras también deben tener `CanFocus = true` para que Terminal.Gui pueda enfocar correctamente sus vistas descendientes. Los paneles son reutilizables y no contienen lógica de red.
 - Las solicitudes de selección se cancelan al cambiar de artista o álbum. El debounce evita llamadas repetidas mientras el usuario recorre rápidamente una lista, y las respuestas antiguas se ignoran.
 
 ## Ampliar la aplicación

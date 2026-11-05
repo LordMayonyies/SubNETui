@@ -2,6 +2,7 @@ using Sub.NETUI.Playback;
 using Sub.NETUI.Subsonic;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
+using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -26,6 +27,8 @@ internal sealed class MainWindow : Window
     private bool _updatingPanes;
     private bool _stopping;
     private int _progressUpdateInFlight;
+    private string _trackNumberBuffer = string.Empty;
+    private long _lastTrackDigitTimestamp;
 
     public MainWindow(IApplication app, SubsonicClient subsonicClient, IAudioPlayer audioPlayer, PlaybackQueue queue)
     {
@@ -82,8 +85,10 @@ internal sealed class MainWindow : Window
         Add(_artistsPane, rightPane, _statusBar);
         _artistsPane.ValueChanged += OnArtistSelectionChanged;
         _albumsPane.ValueChanged += OnAlbumSelectionChanged;
+        _artistsPane.ItemAccepted += _ => _albumsPane.FocusList();
+        _albumsPane.ItemAccepted += _ => _tracksPane.FocusList();
         _tracksPane.ItemAccepted += song => _ = PlaySelectedSongAsync(song);
-        KeyDown += OnKeyDown;
+        _app.Keyboard.KeyDown += OnKeyDown;
         _audioPlayer.TrackEnded += OnTrackEnded;
 
         _artistsPane.FocusList();
@@ -93,6 +98,7 @@ internal sealed class MainWindow : Window
     public void StopBackgroundWork()
     {
         _stopping = true;
+        _app.Keyboard.KeyDown -= OnKeyDown;
         _artistSelectionCancellation?.Cancel();
         _albumSelectionCancellation?.Cancel();
         _progressTimer.Dispose();
@@ -373,6 +379,11 @@ internal sealed class MainWindow : Window
 
     private void OnKeyDown(object? sender, Key e)
     {
+        if (_stopping)
+        {
+            return;
+        }
+
         if (e.KeyCode == Key.Q.WithCtrl)
         {
             e.Handled = true;
@@ -383,17 +394,17 @@ internal sealed class MainWindow : Window
             e.Handled = true;
             _ = StopPlaybackAsync();
         }
-        else if (e.KeyCode == Key.Space)
+        else if (e.KeyCode == Key.Space.WithCtrl)
         {
             e.Handled = true;
             _ = TogglePauseAsync();
         }
-        else if (e.KeyCode == Key.N)
+        else if (e.KeyCode == Key.N.WithCtrl)
         {
             e.Handled = true;
             _ = PlayQueueItemAsync(_queue.Next());
         }
-        else if (e.KeyCode == Key.P)
+        else if (e.KeyCode == Key.P.WithCtrl)
         {
             e.Handled = true;
             _ = PlayQueueItemAsync(_queue.Previous());
@@ -403,6 +414,85 @@ internal sealed class MainWindow : Window
             e.Handled = true;
             FocusNextPane();
         }
+        else if (e.KeyCode == Key.Enter)
+        {
+            if (_artistsPane.ListHasFocus)
+            {
+                e.Handled = true;
+                _albumsPane.FocusList();
+            }
+            else if (_albumsPane.ListHasFocus)
+            {
+                e.Handled = true;
+                _tracksPane.FocusList();
+            }
+        }
+        else if (e.KeyCode == Key.Esc)
+        {
+            e.Handled = true;
+            if (_tracksPane.ListHasFocus)
+            {
+                _albumsPane.FocusList();
+            }
+            else if (_albumsPane.ListHasFocus)
+            {
+                _artistsPane.FocusList();
+            }
+        }
+        else if (e.KeyCode is >= KeyCode.D0 and <= KeyCode.D9 && _tracksPane.ListHasFocus)
+        {
+            e.Handled = true;
+            SelectTrackByDigit((int)(e.KeyCode - KeyCode.D0));
+        }
+    }
+
+    private void SelectTrackByDigit(int digit)
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastTrackDigitTimestamp > 1000)
+        {
+            _trackNumberBuffer = string.Empty;
+        }
+
+        _lastTrackDigitTimestamp = now;
+        _trackNumberBuffer += digit.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        int index = FindTrackIndex(int.Parse(_trackNumberBuffer, System.Globalization.CultureInfo.InvariantCulture));
+        if (index < 0 && _trackNumberBuffer.Length > 1)
+        {
+            _trackNumberBuffer = digit.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            index = FindTrackIndex(digit);
+        }
+
+        if (index >= 0)
+        {
+            _tracksPane.SelectIndex(index);
+        }
+    }
+
+    private int FindTrackIndex(int trackNumber)
+    {
+        int? currentDisc = _tracksPane.SelectedValue?.DiscNumber;
+        int fallback = -1;
+        for (int i = 0; i < _visibleTracks.Count; i++)
+        {
+            Song song = _visibleTracks[i];
+            if (song.Track != trackNumber)
+            {
+                continue;
+            }
+
+            if (song.DiscNumber == currentDisc)
+            {
+                return i;
+            }
+
+            if (fallback < 0)
+            {
+                fallback = i;
+            }
+        }
+
+        return fallback;
     }
 
     private async Task TogglePauseAsync()
