@@ -10,6 +10,7 @@ internal static class Program
 {
     private static void Main(string[] args)
     {
+        using IMediaSession mediaSession = MprisMediaSession.CreateAsync().GetAwaiter().GetResult();
         using IApplication app = Application.Create();
         app.Init();
 
@@ -29,7 +30,7 @@ internal static class Program
         var subsonicClient = new SubsonicClient(httpClient, settings!);
         var playbackQueue = new PlaybackQueue();
 
-        using var mainWindow = new MainWindow(app, subsonicClient, audioPlayer, playbackQueue);
+        using var mainWindow = new MainWindow(app, subsonicClient, audioPlayer, playbackQueue, mediaSession);
         try
         {
             app.Run(mainWindow);

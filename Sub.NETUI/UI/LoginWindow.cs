@@ -30,22 +30,22 @@ internal sealed class LoginWindow : Window
         _httpClient = httpClient;
         var draft = AppSettingsLoader.ReadDraft();
 
-        Title = "Iniciar sesión en Navidrome";
+        Title = "Sign in to Navidrome";
         Width = 72;
         Height = 17;
         X = Pos.Center();
         Y = Pos.Center();
         BorderStyle = LineStyle.Single;
 
-        var urlLabel = new Label { X = 2, Y = 0, Text = "URL del servidor (http o https)" };
+        var urlLabel = new Label { X = 2, Y = 0, Text = "Server URL (http or https)" };
         _urlField = new TextField { X = 2, Y = 1, Width = Dim.Fill(4), Text = draft.Url };
-        var usernameLabel = new Label { X = 2, Y = 3, Text = "Usuario" };
+        var usernameLabel = new Label { X = 2, Y = 3, Text = "Username" };
         _usernameField = new TextField { X = 2, Y = 4, Width = Dim.Fill(4), Text = draft.Username };
-        var passwordLabel = new Label { X = 2, Y = 6, Text = "Contraseña" };
+        var passwordLabel = new Label { X = 2, Y = 6, Text = "Password" };
         _passwordField = new TextField { X = 2, Y = 7, Width = Dim.Fill(4), Text = draft.Password, Secret = true };
         _errorLabel = new Label { X = 2, Y = 9, Width = Dim.Fill(4), Height = 2 };
-        _connectButton = new Button { X = Pos.AnchorEnd(25), Y = 12, Text = "Conectar", IsDefault = true };
-        _exitButton = new Button { X = Pos.AnchorEnd(12), Y = 12, Text = "Salir" };
+        _connectButton = new Button { X = Pos.AnchorEnd(25), Y = 12, Text = "Connect", IsDefault = true };
+        _exitButton = new Button { X = Pos.AnchorEnd(12), Y = 12, Text = "Exit" };
 
         _connectButton.Accepted += (_, _) => _ = ConnectAsync();
         _exitButton.Accepted += (_, _) => StopApplication();
@@ -78,7 +78,7 @@ internal sealed class LoginWindow : Window
         _connecting = true;
         _connectButton.Enabled = false;
         _exitButton.Enabled = false;
-        _errorLabel.Text = "Conectando con Navidrome...";
+        _errorLabel.Text = "Connecting to Navidrome...";
         var connectionCancellation = new CancellationTokenSource();
         lock (_connectionGate)
         {

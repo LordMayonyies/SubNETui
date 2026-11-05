@@ -15,6 +15,7 @@ internal sealed class MainWindow : Window
     private readonly SubsonicClient _subsonicClient;
     private readonly IAudioPlayer _audioPlayer;
     private readonly PlaybackQueue _queue;
+    private readonly IMediaSession _mediaSession;
     private readonly ArtistsPane _artistsPane = new();
     private readonly AlbumsPane _albumsPane = new();
     private readonly TracksPane _tracksPane = new();
@@ -29,13 +30,20 @@ internal sealed class MainWindow : Window
     private int _progressUpdateInFlight;
     private string _trackNumberBuffer = string.Empty;
     private long _lastTrackDigitTimestamp;
+    private Uri? _queueArtworkUri;
 
-    public MainWindow(IApplication app, SubsonicClient subsonicClient, IAudioPlayer audioPlayer, PlaybackQueue queue)
+    public MainWindow(
+        IApplication app,
+        SubsonicClient subsonicClient,
+        IAudioPlayer audioPlayer,
+        PlaybackQueue queue,
+        IMediaSession mediaSession)
     {
         _app = app;
         _subsonicClient = subsonicClient;
         _audioPlayer = audioPlayer;
         _queue = queue;
+        _mediaSession = mediaSession;
         _progressTimer = new Timer(
             _ => _ = UpdateProgressAsync(),
             null,
@@ -90,6 +98,12 @@ internal sealed class MainWindow : Window
         _tracksPane.ItemAccepted += song => _ = PlaySelectedSongAsync(song);
         _app.Keyboard.KeyDown += OnKeyDown;
         _audioPlayer.TrackEnded += OnTrackEnded;
+        _mediaSession.PlayPauseRequested += OnMediaPlayPauseRequested;
+        _mediaSession.PlayRequested += OnMediaPlayRequested;
+        _mediaSession.PauseRequested += OnMediaPauseRequested;
+        _mediaSession.NextRequested += OnMediaNextRequested;
+        _mediaSession.PreviousRequested += OnMediaPreviousRequested;
+        _mediaSession.StopRequested += OnMediaStopRequested;
 
         _artistsPane.FocusList();
         _ = LoadArtistsAsync();
@@ -99,6 +113,12 @@ internal sealed class MainWindow : Window
     {
         _stopping = true;
         _app.Keyboard.KeyDown -= OnKeyDown;
+        _mediaSession.PlayPauseRequested -= OnMediaPlayPauseRequested;
+        _mediaSession.PlayRequested -= OnMediaPlayRequested;
+        _mediaSession.PauseRequested -= OnMediaPauseRequested;
+        _mediaSession.NextRequested -= OnMediaNextRequested;
+        _mediaSession.PreviousRequested -= OnMediaPreviousRequested;
+        _mediaSession.StopRequested -= OnMediaStopRequested;
         _artistSelectionCancellation?.Cancel();
         _albumSelectionCancellation?.Cancel();
         _progressTimer.Dispose();
@@ -108,7 +128,7 @@ internal sealed class MainWindow : Window
     {
         try
         {
-            _statusBar.SetStatus("Conectando con Navidrome...");
+            _statusBar.SetStatus("Connecting to Navidrome...");
             IReadOnlyList<Artist> artists = await _subsonicClient.GetArtistsAsync();
             _app.Invoke(() =>
             {
@@ -122,7 +142,7 @@ internal sealed class MainWindow : Window
                 _updatingPanes = false;
                 if (artists.Count == 0)
                 {
-                    _statusBar.SetStatus("Navidrome no tiene artistas disponibles.");
+                    _statusBar.SetStatus("Navidrome has no artists available.");
                 }
                 else
                 {
@@ -137,7 +157,7 @@ internal sealed class MainWindow : Window
             {
                 if (!_stopping)
                 {
-                    _statusBar.SetStatus($"Error al cargar artistas: {exception.Message}");
+                    _statusBar.SetStatus($"Could not load artists: {exception.Message}");
                 }
             });
         }
@@ -166,7 +186,7 @@ internal sealed class MainWindow : Window
         _albumsPane.SetItems([]);
         if (!_audioPlayer.IsPlaying)
         {
-            _nowPlayingPane.SetMessage("Selecciona un álbum para ver sus canciones");
+            _nowPlayingPane.SetMessage("Select an album to view its tracks");
         }
 
         if (artist is null || _stopping)
@@ -192,7 +212,7 @@ internal sealed class MainWindow : Window
                 _updatingPanes = false;
                 if (albums.Count == 0)
                 {
-                    _statusBar.SetStatus($"{artist.Name} no tiene álbumes.");
+                    _statusBar.SetStatus($"{artist.Name} has no albums.");
                 }
                 else
                 {
@@ -210,7 +230,7 @@ internal sealed class MainWindow : Window
             {
                 if (!_stopping && !cancellation.IsCancellationRequested)
                 {
-                    _statusBar.SetStatus($"Error al cargar álbumes: {exception.Message}");
+                    _statusBar.SetStatus($"Could not load albums: {exception.Message}");
                 }
             });
         }
@@ -270,15 +290,16 @@ internal sealed class MainWindow : Window
                 if (!_audioPlayer.IsPlaying)
                 {
                     _queue.SetTracks(tracks);
+                    _queueArtworkUri = _subsonicClient.BuildCoverArtUri(album.CoverArt);
                 }
                 _updatingPanes = true;
                 _tracksPane.SetItems(tracks);
                 _updatingPanes = false;
                 if (!_audioPlayer.IsPlaying)
                 {
-                    _nowPlayingPane.SetMessage($"{album.Name} · {tracks.Length} canciones");
+                    _nowPlayingPane.SetMessage($"{album.Name} · {tracks.Length} tracks");
                 }
-                _statusBar.SetStatus(tracks.Length == 0 ? "El álbum no contiene canciones." : null);
+                _statusBar.SetStatus(tracks.Length == 0 ? "This album has no tracks." : null);
             });
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -290,7 +311,7 @@ internal sealed class MainWindow : Window
             {
                 if (!_stopping && !cancellation.IsCancellationRequested)
                 {
-                    _statusBar.SetStatus($"Error al cargar canciones: {exception.Message}");
+                    _statusBar.SetStatus($"Could not load tracks: {exception.Message}");
                 }
             });
         }
@@ -319,6 +340,7 @@ internal sealed class MainWindow : Window
 
         _queue.SetTracks(_visibleTracks);
         _queue.StartAt(index);
+        _queueArtworkUri = _subsonicClient.BuildCoverArtUri(_albumsPane.SelectedValue?.CoverArt);
         await StartSongAsync(song);
     }
 
@@ -337,6 +359,8 @@ internal sealed class MainWindow : Window
 
                 _nowPlayingPane.SetTrack(song.Artist ?? string.Empty, song.Title);
                 _statusBar.SetStatus(null);
+                _mediaSession.UpdateTrack(song, _queueArtworkUri);
+                _mediaSession.UpdatePlaybackState(PlaybackState.Playing);
                 StartProgressTimer();
             });
         }
@@ -347,8 +371,9 @@ internal sealed class MainWindow : Window
                 if (!_stopping)
                 {
                     StopProgressTimer();
-                    _nowPlayingPane.SetMessage($"No se pudo reproducir: {exception.Message}");
-                    _statusBar.SetStatus("Comprueba que mpv está instalado y disponible en PATH.");
+                    _nowPlayingPane.SetMessage($"Could not play track: {exception.Message}");
+                    _statusBar.SetStatus("Make sure mpv is installed and available on PATH.");
+                    _mediaSession.UpdatePlaybackState(PlaybackState.Stopped);
                 }
             });
         }
@@ -367,8 +392,9 @@ internal sealed class MainWindow : Window
             if (nextSong is null)
             {
                 StopProgressTimer();
-                _nowPlayingPane.SetMessage("Fin del álbum");
+                _nowPlayingPane.SetMessage("End of album");
                 _statusBar.SetStatus(null);
+                _mediaSession.UpdatePlaybackState(PlaybackState.Stopped);
             }
             else
             {
@@ -505,12 +531,14 @@ internal sealed class MainWindow : Window
                 if (_audioPlayer.IsPaused)
                 {
                     StopProgressTimer();
-                    _statusBar.SetStatus("Reproducción pausada.");
+                    _statusBar.SetStatus("Playback paused.");
+                    _mediaSession.UpdatePlaybackState(PlaybackState.Paused);
                 }
                 else if (_audioPlayer.IsPlaying)
                 {
                     StartProgressTimer();
                     _statusBar.SetStatus(null);
+                    _mediaSession.UpdatePlaybackState(PlaybackState.Playing);
                 }
             });
         }
@@ -528,8 +556,9 @@ internal sealed class MainWindow : Window
             await _audioPlayer.StopAsync();
             _app.Invoke(() =>
             {
-                _nowPlayingPane.SetMessage("Reproducción detenida");
+                _nowPlayingPane.SetMessage("Playback stopped");
                 _statusBar.SetStatus(null);
+                _mediaSession.UpdatePlaybackState(PlaybackState.Stopped);
             });
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException)
@@ -542,11 +571,86 @@ internal sealed class MainWindow : Window
     {
         if (song is null)
         {
-            _statusBar.SetStatus("No hay más canciones en esa dirección.");
+            _statusBar.SetStatus("There are no more tracks in that direction.");
             return Task.CompletedTask;
         }
 
         return StartSongAsync(song);
+    }
+
+    private void OnMediaPlayPauseRequested(object? sender, EventArgs e)
+    {
+        DispatchMediaRequest(() =>
+        {
+            if (_audioPlayer.IsPlaying)
+            {
+                _ = TogglePauseAsync();
+            }
+            else if (_queue.CurrentTrack is { } currentTrack)
+            {
+                _ = StartSongAsync(currentTrack);
+            }
+            else if (_tracksPane.SelectedValue is { } selectedTrack)
+            {
+                _ = PlaySelectedSongAsync(selectedTrack);
+            }
+        });
+    }
+
+    private void OnMediaPlayRequested(object? sender, EventArgs e)
+    {
+        DispatchMediaRequest(() =>
+        {
+            if (_audioPlayer.IsPaused)
+            {
+                _ = TogglePauseAsync();
+            }
+            else if (_queue.CurrentTrack is { } currentTrack)
+            {
+                _ = StartSongAsync(currentTrack);
+            }
+            else if (_tracksPane.SelectedValue is { } selectedTrack)
+            {
+                _ = PlaySelectedSongAsync(selectedTrack);
+            }
+        });
+    }
+
+    private void OnMediaPauseRequested(object? sender, EventArgs e)
+    {
+        DispatchMediaRequest(() =>
+        {
+            if (_audioPlayer.IsPlaying && !_audioPlayer.IsPaused)
+            {
+                _ = TogglePauseAsync();
+            }
+        });
+    }
+
+    private void OnMediaNextRequested(object? sender, EventArgs e)
+    {
+        DispatchMediaRequest(() => _ = PlayQueueItemAsync(_queue.Next()));
+    }
+
+    private void OnMediaPreviousRequested(object? sender, EventArgs e)
+    {
+        DispatchMediaRequest(() => _ = PlayQueueItemAsync(_queue.Previous()));
+    }
+
+    private void OnMediaStopRequested(object? sender, EventArgs e)
+    {
+        DispatchMediaRequest(() => _ = StopPlaybackAsync());
+    }
+
+    private void DispatchMediaRequest(Action action)
+    {
+        _app.Invoke(() =>
+        {
+            if (!_stopping)
+            {
+                action();
+            }
+        });
     }
 
     private void FocusNextPane()
@@ -589,6 +693,11 @@ internal sealed class MainWindow : Window
             {
                 if (!_stopping)
                 {
+                    if (position is { } currentPosition)
+                    {
+                        _mediaSession.UpdatePosition(currentPosition);
+                    }
+
                     _nowPlayingPane.SetProgress(position, duration);
                 }
             });

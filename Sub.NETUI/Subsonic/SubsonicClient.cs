@@ -112,13 +112,20 @@ public sealed class SubsonicClient(HttpClient httpClient, AppSettings settings)
     {
         var response = await GetResponseAsync("getAlbum", [("id", albumId)], cancellationToken);
         var album = response.Response!.Album ??
-                      throw new SubsonicException("La respuesta de Navidrome no contiene el álbum solicitado.");
+                      throw new SubsonicException("The Navidrome response does not contain the requested album.");
         return album with { Songs = album.Songs ?? [] };
     }
 
     public Uri BuildStreamUri(string songId)
     {
         return BuildUri("stream", [("id", songId)]);
+    }
+
+    public Uri? BuildCoverArtUri(string? coverArtId)
+    {
+        return string.IsNullOrWhiteSpace(coverArtId)
+            ? null
+            : BuildUri("getCoverArt", [("id", coverArtId)]);
     }
 
     private async Task<SubsonicEnvelope> GetResponseAsync(
@@ -143,19 +150,19 @@ public sealed class SubsonicClient(HttpClient httpClient, AppSettings settings)
 
         if (response is null)
         {
-            throw new SubsonicException("Navidrome devolvió una respuesta vacía o no válida.");
+            throw new SubsonicException("Navidrome returned an empty or invalid response.");
         }
 
         var apiResponse = response.Response;
         if (apiResponse is null)
         {
-            throw new SubsonicException("Navidrome devolvió una respuesta sin el objeto subsonic-response.");
+            throw new SubsonicException("Navidrome returned a response without a subsonic-response object.");
         }
 
         if (!string.Equals(apiResponse.Status, "ok", StringComparison.OrdinalIgnoreCase))
         {
             var error = apiResponse.Error;
-            throw new SubsonicException(error?.Message ?? "Navidrome rechazó la solicitud.", error?.Code);
+            throw new SubsonicException(error?.Message ?? "Navidrome rejected the request.", error?.Code);
         }
 
         return response;

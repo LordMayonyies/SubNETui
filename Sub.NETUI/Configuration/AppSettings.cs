@@ -28,12 +28,12 @@ public static class AppSettingsLoader
             }
             catch (JsonException exception)
             {
-                error = $"No se pudo leer la configuración en {path}: {exception.Message}";
+                error = $"Could not read the configuration at {path}: {exception.Message}";
                 return false;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                error = $"No se pudo leer la configuración en {path}: {exception.Message}";
+                error = $"Could not read the configuration at {path}: {exception.Message}";
                 return false;
             }
         }
@@ -72,7 +72,7 @@ public static class AppSettingsLoader
         error = null;
         if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
         {
-            error = "Introduce la URL, el usuario y la contraseña de Navidrome.";
+            error = "Enter the Navidrome URL, username, and password.";
             return false;
         }
 
@@ -80,7 +80,7 @@ public static class AppSettingsLoader
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? serverUri) ||
             (serverUri.Scheme != Uri.UriSchemeHttp && serverUri.Scheme != Uri.UriSchemeHttps))
         {
-            error = "La URL debe ser absoluta y usar el protocolo http o https.";
+            error = "The URL must be absolute and use the http or https scheme.";
             return false;
         }
 
