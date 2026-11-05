@@ -111,11 +111,11 @@ public sealed class MpvAudioPlayer : IAudioPlayer
 
         try
         {
-            _process = Process.Start(startInfo) ?? throw new InvalidOperationException("No se pudo iniciar mpv.");
+            _process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start mpv.");
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
-            throw new InvalidOperationException("No se encontró mpv. Instálalo y asegúrate de que está disponible en PATH.", exception);
+            throw new InvalidOperationException("mpv was not found. Install it and make sure it is available on PATH.", exception);
         }
 
         try
@@ -142,7 +142,7 @@ public sealed class MpvAudioPlayer : IAudioPlayer
             {
                 if (_process is null || _process.HasExited)
                 {
-                    throw new InvalidOperationException("mpv se cerró antes de abrir su canal de control.");
+                    throw new InvalidOperationException("mpv exited before opening its control channel.");
                 }
 
                 if (OperatingSystem.IsWindows())
@@ -191,16 +191,16 @@ public sealed class MpvAudioPlayer : IAudioPlayer
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new TimeoutException("mpv no abrió su canal IPC en cinco segundos.");
+            throw new TimeoutException("mpv did not open its IPC channel within five seconds.");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        throw new TimeoutException("mpv no abrió su canal IPC en cinco segundos.");
+        throw new TimeoutException("mpv did not open its IPC channel within five seconds.");
     }
 
     private async Task<JsonElement> SendCommandAsync(object?[] arguments, CancellationToken cancellationToken)
     {
-        Stream stream = _ipcStream ?? throw new InvalidOperationException("mpv no está conectado.");
+        Stream stream = _ipcStream ?? throw new InvalidOperationException("mpv is not connected.");
         int id = Interlocked.Increment(ref _requestId);
         var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingCommands[id] = completion;
@@ -248,7 +248,7 @@ public sealed class MpvAudioPlayer : IAudioPlayer
             JsonElement response = await completion.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
             if (response.TryGetProperty("error", out JsonElement error) && error.GetString() != "success")
             {
-                throw new InvalidOperationException($"mpv rechazó el comando: {error.GetString()}");
+                throw new InvalidOperationException($"mpv rejected the command: {error.GetString()}");
             }
 
             return response;

@@ -6,7 +6,7 @@ namespace Sub.NETUI.UI;
 internal sealed class StatusBar : View
 {
     private const string HelpText =
-        "[Enter/Esc] Navegar  [0-9] Pista  [Ctrl+Espacio] Pausa  [Ctrl+S] Stop  [Ctrl+N/P] Canción  [Ctrl+Q] Salir";
+        "[Enter/Esc] Navigate  [0-9] Select track  [Ctrl+Space] Pause  [Ctrl+S] Stop  [Ctrl+N/P] Skip  [Ctrl+Q] Quit";
 
     private readonly Label _statusLabel;
 

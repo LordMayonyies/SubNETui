@@ -11,14 +11,14 @@ internal sealed class NowPlayingPane : View
 
     public NowPlayingPane()
     {
-        Title = "Reproduciendo";
+        Title = "Now Playing";
         BorderStyle = Terminal.Gui.Drawing.LineStyle.Single;
 
         _trackLabel = new Label { X = 1, Y = 0, Width = Dim.Fill(2) };
         _progressBar = new ProgressBar { X = 1, Y = 1, Width = Dim.Fill(2) };
         _timeLabel = new Label { X = 1, Y = 2, Width = Dim.Fill(2) };
         Add(_trackLabel, _progressBar, _timeLabel);
-        SetMessage("Ninguna canción en reproducción");
+        SetMessage("Nothing is playing");
     }
 
     public void SetMessage(string message)

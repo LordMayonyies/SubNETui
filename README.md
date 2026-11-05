@@ -1,26 +1,27 @@
 # Sub.NETUI
 
-Sub.NETUI es una TUI para explorar una biblioteca de Navidrome mediante la API compatible con Subsonic y reproducir música con `mpv`.
+Sub.NETUI is a terminal UI for browsing a Navidrome library through its Subsonic-compatible API and playing music with `mpv`.
 
-## Requisitos y configuración
+## Requirements and configuration
 
-- .NET 10 SDK para compilar.
-- Una instancia Navidrome accesible por HTTP/HTTPS y sus credenciales.
-- `mpv` instalado y disponible en `PATH` para reproducir audio.
+- .NET 10 SDK to build the application.
+- An HTTP/HTTPS-accessible Navidrome instance and its credentials.
+- `mpv` installed and available on `PATH` for audio playback.
+- On Linux, a D-Bus session bus for desktop media controls.
 
-La configuración se lee de `~/.config/subnetui/config.json` y puede sobrescribirse mediante las variables de entorno `NAVIDROME_URL`, `NAVIDROME_USER` y `NAVIDROME_PASSWORD`:
+Configuration is read from `~/.config/subnetui/config.json` and can be overridden with the `NAVIDROME_URL`, `NAVIDROME_USER`, and `NAVIDROME_PASSWORD` environment variables:
 
 ```json
 {
   "Url": "https://navidrome.example.com",
-  "Username": "usuario",
-  "Password": "contraseña"
+  "Username": "user",
+  "Password": "password"
 }
 ```
 
-Si falta la configuración o no es válida, se abre una ventana de inicio de sesión para introducir o corregir la URL y las credenciales. La aplicación comprueba la conexión con Navidrome antes de guardar los datos en `~/.config/subnetui/config.json`; en sistemas Unix el archivo queda accesible solo para el usuario actual. También se aceptan URL con una ruta base, por ejemplo `https://servidor/musica`.
+If configuration is missing or invalid, a sign-in window opens so you can enter or correct the server URL and credentials. The application checks the Navidrome connection before saving the settings to `~/.config/subnetui/config.json`; on Unix, the file is accessible only to the current user. URLs with a base path, such as `https://server/music`, are also supported.
 
-## Ejecutar y publicar
+## Running and publishing
 
 ```sh
 dotnet run --project Sub.NETUI
@@ -28,40 +29,50 @@ dotnet build Sub.NETUI.slnx
 dotnet publish Sub.NETUI/Sub.NETUI.csproj -c Release -r linux-x64
 ```
 
-Native AOT genera un ejecutable nativo para el runtime indicado en `-r`; usa el identificador de tu sistema y arquitectura. La serialización de configuración y las respuestas Subsonic usan `System.Text.Json` source generation para evitar reflexión dinámica durante el publish. `mpv` es un proceso externo y no se incluye en el ejecutable.
+Native AOT creates a native executable for the runtime specified with `-r`; choose the runtime identifier for your OS and architecture. Configuration and Subsonic responses use `System.Text.Json` source generation to avoid dynamic reflection during publishing. `mpv` is an external process and is not included in the executable.
 
-## Uso
+## Usage
 
-- Flechas: navegar artistas, álbumes y canciones; al llegar al inicio o al final, el foco permanece en el listado.
-- `Tab`: cambiar entre los paneles de artistas, álbumes y canciones.
-- `Enter` en artistas o álbumes: avanzar al panel siguiente; `Esc`: volver al panel anterior. Las flechas no cambian de panel.
-- `Enter` sobre una canción: reproducirla y continuar con las siguientes canciones del álbum.
-- Letras: saltar al primer artista, álbum o canción que empiece por esa letra (búsqueda incremental de `ListView`).
-- Dígitos en el panel de canciones: marcar la pista con ese número; se pueden teclear varios seguidos (por ejemplo `1` `2` para la pista 12) en menos de un segundo.
-- `Ctrl+Espacio`: pausar o reanudar; `Ctrl+S`: detener.
-- `Ctrl+N` / `Ctrl+P`: siguiente / anterior; `Ctrl+Q`: salir.
+- Arrow keys: navigate artists, albums, and tracks; focus stays in the list at its beginning or end.
+- `Tab`: switch between the artists, albums, and tracks panes.
+- `Enter` on an artist or album: move to the next pane; `Esc`: return to the previous pane. Arrow keys never switch panes.
+- `Enter` on a track: play it and continue with the following tracks on the album.
+- Letters: jump to the first artist, album, or track whose name starts with that letter (`ListView` incremental search).
+- Digits in the tracks pane: select a track by its track number; type consecutive digits (for example, `1` then `2` for track 12) within one second.
+- `Ctrl+Space`: pause or resume; `Ctrl+S`: stop.
+- `Ctrl+N` / `Ctrl+P`: next / previous track; `Ctrl+Q`: quit.
 
-Los atajos de reproducción usan `Ctrl` a propósito: las teclas sin modificador quedan libres para la navegación dentro de las listas.
+Playback shortcuts intentionally use `Ctrl`, leaving unmodified letter keys available for list navigation.
 
-El reproductor muestra mensajes comprensibles si `mpv` falta o si no se puede iniciar. La barra de progreso consulta a `mpv` una vez por segundo y se desactiva al pausar o detener.
+### Desktop media keys
 
-## Arquitectura
+On Linux, Sub.NETUI registers an MPRIS player on the D-Bus session bus (`Playback/MprisMediaSession.cs`, using `Tmds.DBus.Protocol`), so desktop shells show the current track and keyboard media keys (Play/Pause, Next, Previous, Stop) control playback while the terminal is unfocused.
 
-- `Configuration`: configuración de ejecución, precedencia de variables de entorno y JSON source-generated.
-- `Subsonic`: modelos, cliente HTTP y errores de API. Cada llamada crea `salt` aleatorio y el token MD5 exigido por Subsonic; el mismo `HttpClient` se reutiliza durante toda la aplicación.
-- `Playback`: cola de canciones y contrato `IAudioPlayer`; `MpvAudioPlayer` mantiene un proceso sin vídeo y un canal IPC para comandos y eventos de fin de pista.
-- `UI`: `MainWindow` coordina vistas y flujo de selección; las vistas no acceden directamente a HTTP. `LibraryListPane<T>` mantiene los modelos tipados y presenta sus nombres en el `ListView` de Terminal.Gui.
-- `Program`: composición manual de dependencias (Pure DI), configuración e inicio de Terminal.Gui.
+- The player is published as `org.mpris.MediaPlayer2.subnetui` (inspect it with `busctl --user introspect org.mpris.MediaPlayer2.subnetui /org/mpris/MediaPlayer2`).
+- `MainWindow` publishes track changes, playback state, playback position, and album artwork to the media session, and routes incoming media requests to the UI thread with `app.Invoke`.
+- If no session bus is available, or another instance already owns the name, the app falls back to a no-op `NullMediaSession` and keeps working normally.
 
-### Ideas de Terminal.Gui v2 aplicadas
+Not implemented: Windows (SMTC) and macOS (Now Playing). Other operating systems use the no-op media session.
 
-- `Application.Create()` crea una instancia de aplicación. `app.Run(window)` ejecuta el bucle principal; las vistas y sus eventos deben manipularse desde el hilo de UI.
-- Las llamadas de red y al reproductor se esperan fuera del hilo de UI. El resultado se aplica con `app.Invoke(...)`, que agenda el cambio en el hilo de la aplicación.
-- `Pos` describe la posición relativa a otras vistas y `Dim` el tamaño relativo al espacio disponible. Los paneles se componen como vistas hijas para que el layout pueda cambiar sin mezclarlo con la lógica Subsonic.
-- La navegación se observa mediante `ListView.ValueChanged`; las acciones confirmadas se enlazan a `Accepted`. `Accepting` es el evento cancelable previo a la aceptación y conviene reservarlo para validar o impedir una acción, no para ejecutar side effects.
-- El foco pertenece a las vistas que reciben entrada; `Tab` recorre las listas y `Enter`/`Esc` avanzan o retroceden entre ellas. Las `SuperView` contenedoras también deben tener `CanFocus = true` para que Terminal.Gui pueda enfocar correctamente sus vistas descendientes. Los paneles son reutilizables y no contienen lógica de red.
-- Las solicitudes de selección se cancelan al cambiar de artista o álbum. El debounce evita llamadas repetidas mientras el usuario recorre rápidamente una lista, y las respuestas antiguas se ignoran.
+The player displays a useful error if `mpv` is missing or cannot start. The progress bar queries `mpv` once per second and stops updating while playback is paused or stopped.
 
-## Ampliar la aplicación
+## Architecture
 
-Para agregar una función, añade primero el tipo y el método de API en `Subsonic`, registra los nuevos tipos raíz en `SubsonicJsonContext` para mantener la compatibilidad AOT, y expón una vista o un servicio pequeño desde su capa. Mantén HTTP fuera de las vistas; deja que `MainWindow` coordine las acciones y use `app.Invoke` para aplicar resultados. Si una nueva operación tiene efectos secundarios, liga su ejecución a `Accepted` o a un atajo claro y cubre la cancelación y los errores de API.
+- `Configuration`: runtime settings, environment-variable precedence, and source-generated JSON serialization.
+- `Subsonic`: models, HTTP client, and API errors. Each request creates a random `salt` and the MD5 token required by Subsonic; the same `HttpClient` is reused for the lifetime of the application.
+- `Playback`: track queue, `IAudioPlayer`, and `IMediaSession` contracts. `MpvAudioPlayer` manages a headless process and IPC channel for commands and end-of-track events; `MprisMediaSession` exposes playback to Linux desktop controls over D-Bus.
+- `UI`: `MainWindow` coordinates views and selection flow; views do not access HTTP directly. `LibraryListPane<T>` keeps typed models and displays their names in a Terminal.Gui `ListView`.
+- `Program`: manual dependency composition (Pure DI), configuration, and Terminal.Gui startup.
+
+### Terminal.Gui v2 concepts in use
+
+- `Application.Create()` creates an application instance. `app.Run(window)` runs the main loop; views and their events must be manipulated on the UI thread.
+- Network and player calls are awaited outside the UI thread. Results are applied with `app.Invoke(...)`, which schedules work on the application thread.
+- `Pos` describes a position relative to other views and `Dim` describes a size relative to available space. Panes are composed as child views so the layout can change without mixing it with Subsonic logic.
+- Navigation is observed through `ListView.ValueChanged`; confirmed actions are handled with `Accepted`. `Accepting` is the cancellable event before acceptance and is best reserved for validating or blocking an action rather than performing side effects.
+- Focus belongs to views that receive input; `Tab` cycles through lists and `Enter`/`Esc` move forward or backward. Parent `SuperView`s also need `CanFocus = true` so Terminal.Gui can focus their descendants. Panes are reusable and contain no network logic.
+- Selection requests are cancelled when the artist or album changes. Debouncing avoids repeated requests while quickly moving through a list, and stale responses are ignored.
+
+## Extending the application
+
+To add a feature, first add the API type and method in `Subsonic`, register new root types in `SubsonicJsonContext` to preserve AOT compatibility, and expose a view or small service in its layer. Keep HTTP out of views; let `MainWindow` coordinate actions and use `app.Invoke` to apply results. If an operation has side effects, bind it to `Accepted` or a clear shortcut and handle cancellation and API errors.
