@@ -119,6 +119,8 @@ public sealed class MpvAudioPlayer : IAudioPlayer
         startInfo.ArgumentList.Add("--idle=yes");
         startInfo.ArgumentList.Add("--force-window=no");
         startInfo.ArgumentList.Add("--terminal=no");
+        startInfo.ArgumentList.Add("--demuxer-max-bytes=8MiB");
+        startInfo.ArgumentList.Add("--demuxer-max-back-bytes=2MiB");
         startInfo.ArgumentList.Add($"--input-ipc-server={_ipcAddress}");
 
         try

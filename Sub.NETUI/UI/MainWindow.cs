@@ -11,47 +11,32 @@ namespace Sub.NETUI.UI;
 
 internal sealed class MainWindow : Window
 {
-    private static readonly TimeSpan RestartThreshold = TimeSpan.FromSeconds(3);
     private readonly IApplication _app;
     private readonly SubsonicClient _subsonicClient;
-    private readonly IAudioPlayer _audioPlayer;
-    private readonly PlaybackQueue _queue;
-    private readonly IMediaSession _mediaSession;
+    private readonly IPlaybackService _playback;
     private readonly ArtistsPane _artistsPane = new();
     private readonly AlbumsPane _albumsPane = new();
     private readonly TracksPane _tracksPane = new();
     private readonly NowPlayingPane _nowPlayingPane = new();
     private readonly StatusBar _statusBar = new();
-    private readonly Timer _progressTimer;
     private CancellationTokenSource? _artistSelectionCancellation;
     private CancellationTokenSource? _albumSelectionCancellation;
     private IReadOnlyList<Song> _visibleTracks = [];
     private bool _updatingPanes;
     private bool _stopping;
-    private int _progressUpdateInFlight;
-    private int _playbackGeneration;
-    private TimeSpan _lastPosition;
     private string _trackNumberBuffer = string.Empty;
     private long _lastTrackDigitTimestamp;
-    private Uri? _queueArtworkUri;
+    private Uri? _visibleArtworkUri;
+    private Song? _displayedTrack;
 
     public MainWindow(
         IApplication app,
         SubsonicClient subsonicClient,
-        IAudioPlayer audioPlayer,
-        PlaybackQueue queue,
-        IMediaSession mediaSession)
+        IPlaybackService playback)
     {
         _app = app;
         _subsonicClient = subsonicClient;
-        _audioPlayer = audioPlayer;
-        _queue = queue;
-        _mediaSession = mediaSession;
-        _progressTimer = new Timer(
-            _ => _ = UpdateProgressAsync(),
-            null,
-            System.Threading.Timeout.InfiniteTimeSpan,
-            System.Threading.Timeout.InfiniteTimeSpan);
+        _playback = playback;
 
         Title = "Sub.NETUI - Navidrome";
         Width = Dim.Fill();
@@ -98,17 +83,16 @@ internal sealed class MainWindow : Window
         _albumsPane.ValueChanged += OnAlbumSelectionChanged;
         _artistsPane.ItemAccepted += _ => _albumsPane.FocusList();
         _albumsPane.ItemAccepted += _ => _tracksPane.FocusList();
+        _tracksPane.ValueChanged += OnTrackSelectionChanged;
         _tracksPane.ItemAccepted += song => _ = PlaySelectedSongAsync(song);
         _app.Keyboard.KeyDown += OnKeyDown;
-        _audioPlayer.TrackEnded += OnTrackEnded;
-        _mediaSession.PlayPauseRequested += OnMediaPlayPauseRequested;
-        _mediaSession.PlayRequested += OnMediaPlayRequested;
-        _mediaSession.PauseRequested += OnMediaPauseRequested;
-        _mediaSession.NextRequested += OnMediaNextRequested;
-        _mediaSession.PreviousRequested += OnMediaPreviousRequested;
-        _mediaSession.StopRequested += OnMediaStopRequested;
-        _mediaSession.SeekRequested += OnMediaSeekRequested;
+        _playback.StateChanged += OnPlaybackStateChanged;
+        _playback.ProgressChanged += OnPlaybackProgressChanged;
+        _playback.NoticeRaised += OnPlaybackNoticeRaised;
+        _playback.ShutdownRequested += OnPlaybackShutdownRequested;
 
+        OnPlaybackStateChanged(this, _playback.Current);
+        OnPlaybackProgressChanged(this, _playback.Progress);
         _artistsPane.FocusList();
         _ = LoadArtistsAsync();
     }
@@ -117,16 +101,12 @@ internal sealed class MainWindow : Window
     {
         _stopping = true;
         _app.Keyboard.KeyDown -= OnKeyDown;
-        _mediaSession.PlayPauseRequested -= OnMediaPlayPauseRequested;
-        _mediaSession.PlayRequested -= OnMediaPlayRequested;
-        _mediaSession.PauseRequested -= OnMediaPauseRequested;
-        _mediaSession.NextRequested -= OnMediaNextRequested;
-        _mediaSession.PreviousRequested -= OnMediaPreviousRequested;
-        _mediaSession.StopRequested -= OnMediaStopRequested;
-        _mediaSession.SeekRequested -= OnMediaSeekRequested;
+        _playback.StateChanged -= OnPlaybackStateChanged;
+        _playback.ProgressChanged -= OnPlaybackProgressChanged;
+        _playback.NoticeRaised -= OnPlaybackNoticeRaised;
+        _playback.ShutdownRequested -= OnPlaybackShutdownRequested;
         _artistSelectionCancellation?.Cancel();
         _albumSelectionCancellation?.Cancel();
-        _progressTimer.Dispose();
     }
 
     private async Task LoadArtistsAsync()
@@ -186,14 +166,11 @@ internal sealed class MainWindow : Window
         _artistSelectionCancellation = null;
         _albumSelectionCancellation?.Cancel();
         _visibleTracks = [];
-        if (!_audioPlayer.IsPlaying)
-        {
-            _queue.SetTracks([]);
-        }
-
+        _visibleArtworkUri = null;
+        _ = _playback.CueAsync([], -1, null);
         _tracksPane.SetItems([]);
         _albumsPane.SetItems([]);
-        if (!_audioPlayer.IsPlaying)
+        if (!_playback.IsActive)
         {
             _nowPlayingPane.SetMessage("Select an album to view its tracks");
         }
@@ -268,11 +245,8 @@ internal sealed class MainWindow : Window
         _albumSelectionCancellation?.Dispose();
         _albumSelectionCancellation = null;
         _visibleTracks = [];
-        if (!_audioPlayer.IsPlaying)
-        {
-            _queue.SetTracks([]);
-        }
-
+        _visibleArtworkUri = null;
+        _ = _playback.CueAsync([], -1, null);
         _tracksPane.SetItems([]);
 
         if (albumSummary is null || _stopping)
@@ -301,16 +275,12 @@ internal sealed class MainWindow : Window
                     .ThenBy(song => song.Track ?? int.MaxValue)
                     .ToArray();
                 _visibleTracks = tracks;
-                if (!_audioPlayer.IsPlaying)
-                {
-                    _queue.SetTracks(tracks);
-                    _queueArtworkUri = _subsonicClient.BuildCoverArtUri(album.CoverArt);
-                }
-
+                _visibleArtworkUri = _subsonicClient.BuildCoverArtUri(album.CoverArt);
                 _updatingPanes = true;
                 _tracksPane.SetItems(tracks);
                 _updatingPanes = false;
-                if (!_audioPlayer.IsPlaying)
+                _ = _playback.CueAsync(tracks, _tracksPane.SelectedIndex ?? 0, _visibleArtworkUri);
+                if (!_playback.IsActive)
                 {
                     _nowPlayingPane.SetMessage($"{album.Name} · {tracks.Length} tracks");
                 }
@@ -347,51 +317,20 @@ internal sealed class MainWindow : Window
             }
         }
 
-        _queue.SetTracks(_visibleTracks);
-        _queue.StartAt(index);
-        _queueArtworkUri = _subsonicClient.BuildCoverArtUri(_albumsPane.SelectedValue?.CoverArt);
-        await StartSongAsync(song);
+        await _playback.PlayQueueAsync(_visibleTracks, index, _visibleArtworkUri);
     }
 
-    private async Task StartSongAsync(Song song)
+    private void OnTrackSelectionChanged(Song? song)
     {
-        try
+        if (_updatingPanes || _tracksPane.SelectedIndex is not { } index)
         {
-            StopProgressTimer();
-            InvalidateProgress();
-            await _audioPlayer.PlayAsync(_subsonicClient.BuildStreamUri(song.Id));
-            _app.Invoke(() =>
-            {
-                if (_stopping)
-                {
-                    return;
-                }
+            return;
+        }
 
-                InvalidateProgress();
-                _nowPlayingPane.SetTrack(song.Artist ?? string.Empty, song.Title);
-                _statusBar.SetStatus(null);
-                _mediaSession.UpdateTrack(song, _queueArtworkUri);
-                _mediaSession.UpdatePlaybackState(PlaybackState.Playing);
-                StartProgressTimer();
-            });
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException
-                                              or System.ComponentModel.Win32Exception)
-        {
-            _app.Invoke(() =>
-            {
-                if (!_stopping)
-                {
-                    StopProgressTimer();
-                    _nowPlayingPane.SetMessage($"Could not play track: {exception.Message}");
-                    _statusBar.SetStatus("Make sure mpv is installed and available on PATH.");
-                    _mediaSession.UpdatePlaybackState(PlaybackState.Stopped);
-                }
-            });
-        }
+        _ = _playback.CueAsync(_visibleTracks, index, _visibleArtworkUri);
     }
 
-    private void OnTrackEnded(object? sender, EventArgs eventArgs)
+    private void OnPlaybackStateChanged(object? sender, PlaybackSnapshot snapshot)
     {
         _app.Invoke(() =>
         {
@@ -400,18 +339,65 @@ internal sealed class MainWindow : Window
                 return;
             }
 
-            InvalidateProgress();
-            Song? nextSong = _queue.Next();
-            if (nextSong is null)
+            switch (snapshot.State)
             {
-                StopProgressTimer();
-                _nowPlayingPane.SetMessage("End of album");
-                _statusBar.SetStatus(null);
-                _mediaSession.UpdatePlaybackState(PlaybackState.Stopped);
+                case PlaybackState.Playing:
+                    if (_displayedTrack != snapshot.Track && snapshot.Track is { } track)
+                    {
+                        _nowPlayingPane.SetTrack(track.Artist ?? string.Empty, track.Title);
+                    }
+
+                    _displayedTrack = snapshot.Track;
+                    _statusBar.SetStatus(null);
+                    break;
+                case PlaybackState.Paused:
+                    _statusBar.SetStatus("Playback paused.");
+                    break;
+                default:
+                    _displayedTrack = null;
+                    _nowPlayingPane.SetMessage(snapshot.Message ?? "Nothing is playing");
+                    _statusBar.SetStatus(null);
+                    break;
             }
-            else
+        });
+    }
+
+    private void OnPlaybackProgressChanged(object? sender, PlaybackProgress progress)
+    {
+        _app.Invoke(() =>
+        {
+            if (!_stopping && _displayedTrack is not null)
             {
-                _ = StartSongAsync(nextSong);
+                _nowPlayingPane.SetProgress(progress.Position, progress.Duration);
+            }
+        });
+    }
+
+    private async Task ShutdownAndQuitAsync()
+    {
+        _statusBar.SetStatus("Stopping playback...");
+        await _playback.ShutdownAsync();
+        _app.Invoke(() => _app.RequestStop());
+    }
+
+    private void OnPlaybackShutdownRequested(object? sender, EventArgs e)
+    {
+        _app.Invoke(() =>
+        {
+            if (!_stopping)
+            {
+                _app.RequestStop();
+            }
+        });
+    }
+
+    private void OnPlaybackNoticeRaised(object? sender, string message)
+    {
+        _app.Invoke(() =>
+        {
+            if (!_stopping)
+            {
+                _statusBar.SetStatus(message);
             }
         });
     }
@@ -428,25 +414,30 @@ internal sealed class MainWindow : Window
             e.Handled = true;
             _app.RequestStop();
         }
+        else if (e.KeyCode == Key.X.WithCtrl)
+        {
+            e.Handled = true;
+            _ = ShutdownAndQuitAsync();
+        }
         else if (e.KeyCode == Key.S.WithCtrl)
         {
             e.Handled = true;
-            _ = StopPlaybackAsync();
+            _ = _playback.StopAsync();
         }
         else if (e.KeyCode == Key.Space.WithCtrl)
         {
             e.Handled = true;
-            _ = TogglePauseAsync();
+            _ = _playback.TogglePauseAsync();
         }
         else if (e.KeyCode == Key.N.WithCtrl)
         {
             e.Handled = true;
-            _ = PlayQueueItemAsync(_queue.Next());
+            _ = _playback.NextAsync();
         }
         else if (e.KeyCode == Key.P.WithCtrl)
         {
             e.Handled = true;
-            _ = PlayPreviousAsync();
+            _ = _playback.PreviousAsync();
         }
         else if (e.KeyCode == Key.Tab)
         {
@@ -534,186 +525,6 @@ internal sealed class MainWindow : Window
         return fallback;
     }
 
-    private async Task TogglePauseAsync()
-    {
-        try
-        {
-            await _audioPlayer.TogglePauseAsync();
-            _app.Invoke(() =>
-            {
-                if (_audioPlayer.IsPaused)
-                {
-                    StopProgressTimer();
-                    _statusBar.SetStatus("Playback paused.");
-                    _mediaSession.UpdatePlaybackState(PlaybackState.Paused);
-                }
-                else if (_audioPlayer.IsPlaying)
-                {
-                    StartProgressTimer();
-                    _statusBar.SetStatus(null);
-                    _mediaSession.UpdatePlaybackState(PlaybackState.Playing);
-                }
-            });
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException)
-        {
-            _app.Invoke(() => _statusBar.SetStatus(exception.Message));
-        }
-    }
-
-    private async Task StopPlaybackAsync()
-    {
-        try
-        {
-            StopProgressTimer();
-            InvalidateProgress();
-            await _audioPlayer.StopAsync();
-            _app.Invoke(() =>
-            {
-                _nowPlayingPane.SetMessage("Playback stopped");
-                _statusBar.SetStatus(null);
-                _mediaSession.UpdatePlaybackState(PlaybackState.Stopped);
-            });
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException)
-        {
-            _app.Invoke(() => _statusBar.SetStatus(exception.Message));
-        }
-    }
-
-    private Task PlayPreviousAsync()
-    {
-        if (_audioPlayer.IsPlaying && _lastPosition > RestartThreshold)
-        {
-            return SeekAsync(TimeSpan.Zero);
-        }
-
-        return PlayQueueItemAsync(_queue.Previous());
-    }
-
-    private async Task SeekAsync(TimeSpan position)
-    {
-        if (!_audioPlayer.IsPlaying)
-        {
-            return;
-        }
-
-        try
-        {
-            await _audioPlayer.SeekAsync(position);
-            _app.Invoke(() =>
-            {
-                if (_stopping)
-                {
-                    return;
-                }
-
-                InvalidateProgress();
-                _lastPosition = position;
-                _mediaSession.NotifySeeked(position);
-                if (!_audioPlayer.IsPaused)
-                {
-                    StartProgressTimer();
-                }
-            });
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException)
-        {
-            _app.Invoke(() => _statusBar.SetStatus($"Could not seek: {exception.Message}"));
-        }
-    }
-
-    private Task PlayQueueItemAsync(Song? song)
-    {
-        if (song is null)
-        {
-            _statusBar.SetStatus("There are no more tracks in that direction.");
-            return Task.CompletedTask;
-        }
-
-        return StartSongAsync(song);
-    }
-
-    private void OnMediaPlayPauseRequested(object? sender, EventArgs e)
-    {
-        DispatchMediaRequest(() =>
-        {
-            if (_audioPlayer.IsPlaying)
-            {
-                _ = TogglePauseAsync();
-            }
-            else if (_queue.CurrentTrack is { } currentTrack)
-            {
-                _ = StartSongAsync(currentTrack);
-            }
-            else if (_tracksPane.SelectedValue is { } selectedTrack)
-            {
-                _ = PlaySelectedSongAsync(selectedTrack);
-            }
-        });
-    }
-
-    private void OnMediaPlayRequested(object? sender, EventArgs e)
-    {
-        DispatchMediaRequest(() =>
-        {
-            if (_audioPlayer.IsPaused)
-            {
-                _ = TogglePauseAsync();
-            }
-            else if (_queue.CurrentTrack is { } currentTrack)
-            {
-                _ = StartSongAsync(currentTrack);
-            }
-            else if (_tracksPane.SelectedValue is { } selectedTrack)
-            {
-                _ = PlaySelectedSongAsync(selectedTrack);
-            }
-        });
-    }
-
-    private void OnMediaPauseRequested(object? sender, EventArgs e)
-    {
-        DispatchMediaRequest(() =>
-        {
-            if (_audioPlayer.IsPlaying && !_audioPlayer.IsPaused)
-            {
-                _ = TogglePauseAsync();
-            }
-        });
-    }
-
-    private void OnMediaNextRequested(object? sender, EventArgs e)
-    {
-        DispatchMediaRequest(() => _ = PlayQueueItemAsync(_queue.Next()));
-    }
-
-    private void OnMediaPreviousRequested(object? sender, EventArgs e)
-    {
-        DispatchMediaRequest(() => _ = PlayPreviousAsync());
-    }
-
-    private void OnMediaStopRequested(object? sender, EventArgs e)
-    {
-        DispatchMediaRequest(() => _ = StopPlaybackAsync());
-    }
-
-    private void OnMediaSeekRequested(object? sender, TimeSpan position)
-    {
-        DispatchMediaRequest(() => _ = SeekAsync(position));
-    }
-
-    private void DispatchMediaRequest(Action action)
-    {
-        _app.Invoke(() =>
-        {
-            if (!_stopping)
-            {
-                action();
-            }
-        });
-    }
-
     private void FocusNextPane()
     {
         if (_artistsPane.ListHasFocus)
@@ -727,58 +538,6 @@ internal sealed class MainWindow : Window
         else
         {
             _artistsPane.FocusList();
-        }
-    }
-
-    private void StartProgressTimer()
-    {
-        _progressTimer.Change(TimeSpan.Zero, TimeSpan.FromSeconds(1));
-    }
-
-    private void InvalidateProgress()
-    {
-        Interlocked.Increment(ref _playbackGeneration);
-        _lastPosition = TimeSpan.Zero;
-    }
-
-    private void StopProgressTimer()
-    {
-        _progressTimer.Change(System.Threading.Timeout.InfiniteTimeSpan, System.Threading.Timeout.InfiniteTimeSpan);
-    }
-
-    private async Task UpdateProgressAsync()
-    {
-        if (_stopping || Interlocked.Exchange(ref _progressUpdateInFlight, 1) != 0)
-        {
-            return;
-        }
-
-        try
-        {
-            int generation = Volatile.Read(ref _playbackGeneration);
-            (TimeSpan? position, TimeSpan? duration) = await _audioPlayer.GetProgressAsync();
-            _app.Invoke(() =>
-            {
-                if (_stopping || generation != Volatile.Read(ref _playbackGeneration))
-                {
-                    return;
-                }
-
-                _nowPlayingPane.SetProgress(position, duration);
-                if (position is { } currentPosition)
-                {
-                    _lastPosition = currentPosition;
-                    _mediaSession.UpdateProgress(currentPosition, duration);
-                }
-            });
-        }
-        catch (Exception exception)
-            when (exception is InvalidOperationException or IOException or TimeoutException or ObjectDisposedException)
-        {
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _progressUpdateInFlight, 0);
         }
     }
 }

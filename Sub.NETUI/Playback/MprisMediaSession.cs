@@ -125,6 +125,8 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
 
     public event EventHandler<TimeSpan>? SeekRequested;
 
+    public event EventHandler? QuitRequested;
+
     public static async Task<IMediaSession> CreateAsync()
     {
         var session = await CreateCoreAsync().ConfigureAwait(false);
@@ -265,8 +267,15 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
             switch (request.MemberAsString)
             {
                 case "Raise":
+                    ReplyEmpty(context);
+                    return default;
                 case "Quit":
                     ReplyEmpty(context);
+                    if (QuitRequested is { } quit)
+                    {
+                        InvokeSafely(quit);
+                    }
+
                     return default;
             }
         }
@@ -475,7 +484,7 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
             {
                 properties = new Dictionary<string, VariantValue>
                 {
-                    ["CanQuit"] = false,
+                    ["CanQuit"] = true,
                     ["CanRaise"] = false,
                     ["HasTrackList"] = false,
                     ["Identity"] = "Sub.NETUI",

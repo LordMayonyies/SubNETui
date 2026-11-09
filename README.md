@@ -29,6 +29,22 @@ dotnet build Sub.NETUI.slnx
 dotnet publish Sub.NETUI/Sub.NETUI.csproj -c Release -r linux-x64
 ```
 
+### Background playback
+
+Playback runs in a background daemon, so music keeps playing after you quit the TUI or close its terminal. The TUI connects to the daemon on startup, starting it if needed (detached into its own session with stdio on `/dev/null`), and shows the current track when you reopen it. If the daemon cannot be reached, the TUI falls back to in-process playback and says so in the window title.
+
+`subnetui daemon` runs playback headless: `mpv`, the queue, and the MPRIS session, with no terminal UI. It listens on `$XDG_RUNTIME_DIR/subnetui.sock` (user-only permissions), records its PID in `subnetui.pid`, and refuses to start if another daemon holds `subnetui.lock`.
+
+Ways to shut the daemon down:
+
+- `Ctrl+X` in the TUI.
+- `subnetui daemon stop` from a shell. It waits until the process has exited, and kills it (together with `mpv`) if it does not respond within five seconds. Run it after installing a new build so the next TUI starts the new daemon.
+- The desktop player's quit action (MPRIS `Quit`).
+- `SIGTERM` or `SIGINT`.
+- Automatically, five minutes after playback stops when no TUI is connected.
+
+The protocol is one JSON object per line. Clients send commands such as `{"type":"play-queue","tracks":[...],"index":0}`, `{"type":"toggle-pause"}`, or `{"type":"seek","position":42.5}`; the daemon sends `state`, `progress`, and `notice` events, starting with the current state when a client connects. `subnetui daemon --detach` is what the TUI uses to start it.
+
 Native AOT creates a native executable for the runtime specified with `-r`; choose the runtime identifier for your OS and architecture. Configuration and Subsonic responses use `System.Text.Json` source generation to avoid dynamic reflection during publishing. `mpv` is an external process and is not included in the executable.
 
 ## Usage
@@ -40,7 +56,8 @@ Native AOT creates a native executable for the runtime specified with `-r`; choo
 - Letters: jump to the first artist, album, or track whose name starts with that letter (`ListView` incremental search).
 - Digits in the tracks pane: select a track by its track number; type consecutive digits (for example, `1` then `2` for track 12) within one second.
 - `Ctrl+Space`: pause or resume; `Ctrl+S`: stop.
-- `Ctrl+N` / `Ctrl+P`: next / previous track (previous restarts the current track if more than 3 seconds have played); `Ctrl+Q`: quit.
+- `Ctrl+N` / `Ctrl+P`: next / previous track (previous restarts the current track if more than 3 seconds have played).
+- `Ctrl+Q`: quit the TUI; music keeps playing in the background. `Ctrl+X`: stop playback, shut down the background daemon, and quit.
 
 Playback shortcuts intentionally use `Ctrl`, leaving unmodified letter keys available for list navigation.
 
@@ -60,7 +77,8 @@ The player displays a useful error if `mpv` is missing or cannot start. The prog
 
 - `Configuration`: runtime settings, environment-variable precedence, and source-generated JSON serialization.
 - `Subsonic`: models, HTTP client, and API errors. Each request creates a random `salt` and the MD5 token required by Subsonic; the same `HttpClient` is reused for the lifetime of the application.
-- `Playback`: track queue, `IAudioPlayer`, and `IMediaSession` contracts. `MpvAudioPlayer` manages a headless process and IPC channel for commands and end-of-track events; `MprisMediaSession` exposes playback to Linux desktop controls over D-Bus.
+- `Playback`: track queue, `IAudioPlayer`, and `IMediaSession` contracts. `PlaybackController` owns the queue, player, media session, and progress tracking, and serializes every command. `MpvAudioPlayer` manages a headless process and IPC channel for commands and end-of-track events; `MprisMediaSession` exposes playback to Linux desktop controls over D-Bus.
+- `Daemon`: `subnetui daemon` mode. `PlaybackDaemon` hosts a `PlaybackController` behind a Unix socket; `DaemonProtocol` defines the JSON-lines commands and events.
 - `UI`: `MainWindow` coordinates views and selection flow; views do not access HTTP directly. `LibraryListPane<T>` keeps typed models and displays their names in a Terminal.Gui `ListView`.
 - `Program`: manual dependency composition (Pure DI), configuration, and Terminal.Gui startup.
 
