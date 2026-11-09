@@ -11,6 +11,7 @@ namespace Sub.NETUI.UI;
 
 internal sealed class MainWindow : Window
 {
+    private static readonly TimeSpan RestartThreshold = TimeSpan.FromSeconds(3);
     private readonly IApplication _app;
     private readonly SubsonicClient _subsonicClient;
     private readonly IAudioPlayer _audioPlayer;
@@ -28,6 +29,8 @@ internal sealed class MainWindow : Window
     private bool _updatingPanes;
     private bool _stopping;
     private int _progressUpdateInFlight;
+    private int _playbackGeneration;
+    private TimeSpan _lastPosition;
     private string _trackNumberBuffer = string.Empty;
     private long _lastTrackDigitTimestamp;
     private Uri? _queueArtworkUri;
@@ -104,6 +107,7 @@ internal sealed class MainWindow : Window
         _mediaSession.NextRequested += OnMediaNextRequested;
         _mediaSession.PreviousRequested += OnMediaPreviousRequested;
         _mediaSession.StopRequested += OnMediaStopRequested;
+        _mediaSession.SeekRequested += OnMediaSeekRequested;
 
         _artistsPane.FocusList();
         _ = LoadArtistsAsync();
@@ -119,6 +123,7 @@ internal sealed class MainWindow : Window
         _mediaSession.NextRequested -= OnMediaNextRequested;
         _mediaSession.PreviousRequested -= OnMediaPreviousRequested;
         _mediaSession.StopRequested -= OnMediaStopRequested;
+        _mediaSession.SeekRequested -= OnMediaSeekRequested;
         _artistSelectionCancellation?.Cancel();
         _albumSelectionCancellation?.Cancel();
         _progressTimer.Dispose();
@@ -353,6 +358,7 @@ internal sealed class MainWindow : Window
         try
         {
             StopProgressTimer();
+            InvalidateProgress();
             await _audioPlayer.PlayAsync(_subsonicClient.BuildStreamUri(song.Id));
             _app.Invoke(() =>
             {
@@ -361,6 +367,7 @@ internal sealed class MainWindow : Window
                     return;
                 }
 
+                InvalidateProgress();
                 _nowPlayingPane.SetTrack(song.Artist ?? string.Empty, song.Title);
                 _statusBar.SetStatus(null);
                 _mediaSession.UpdateTrack(song, _queueArtworkUri);
@@ -393,6 +400,7 @@ internal sealed class MainWindow : Window
                 return;
             }
 
+            InvalidateProgress();
             Song? nextSong = _queue.Next();
             if (nextSong is null)
             {
@@ -438,7 +446,7 @@ internal sealed class MainWindow : Window
         else if (e.KeyCode == Key.P.WithCtrl)
         {
             e.Handled = true;
-            _ = PlayQueueItemAsync(_queue.Previous());
+            _ = PlayPreviousAsync();
         }
         else if (e.KeyCode == Key.Tab)
         {
@@ -558,6 +566,7 @@ internal sealed class MainWindow : Window
         try
         {
             StopProgressTimer();
+            InvalidateProgress();
             await _audioPlayer.StopAsync();
             _app.Invoke(() =>
             {
@@ -569,6 +578,48 @@ internal sealed class MainWindow : Window
         catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException)
         {
             _app.Invoke(() => _statusBar.SetStatus(exception.Message));
+        }
+    }
+
+    private Task PlayPreviousAsync()
+    {
+        if (_audioPlayer.IsPlaying && _lastPosition > RestartThreshold)
+        {
+            return SeekAsync(TimeSpan.Zero);
+        }
+
+        return PlayQueueItemAsync(_queue.Previous());
+    }
+
+    private async Task SeekAsync(TimeSpan position)
+    {
+        if (!_audioPlayer.IsPlaying)
+        {
+            return;
+        }
+
+        try
+        {
+            await _audioPlayer.SeekAsync(position);
+            _app.Invoke(() =>
+            {
+                if (_stopping)
+                {
+                    return;
+                }
+
+                InvalidateProgress();
+                _lastPosition = position;
+                _mediaSession.NotifySeeked(position);
+                if (!_audioPlayer.IsPaused)
+                {
+                    StartProgressTimer();
+                }
+            });
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException)
+        {
+            _app.Invoke(() => _statusBar.SetStatus($"Could not seek: {exception.Message}"));
         }
     }
 
@@ -639,12 +690,17 @@ internal sealed class MainWindow : Window
 
     private void OnMediaPreviousRequested(object? sender, EventArgs e)
     {
-        DispatchMediaRequest(() => _ = PlayQueueItemAsync(_queue.Previous()));
+        DispatchMediaRequest(() => _ = PlayPreviousAsync());
     }
 
     private void OnMediaStopRequested(object? sender, EventArgs e)
     {
         DispatchMediaRequest(() => _ = StopPlaybackAsync());
+    }
+
+    private void OnMediaSeekRequested(object? sender, TimeSpan position)
+    {
+        DispatchMediaRequest(() => _ = SeekAsync(position));
     }
 
     private void DispatchMediaRequest(Action action)
@@ -679,6 +735,12 @@ internal sealed class MainWindow : Window
         _progressTimer.Change(TimeSpan.Zero, TimeSpan.FromSeconds(1));
     }
 
+    private void InvalidateProgress()
+    {
+        Interlocked.Increment(ref _playbackGeneration);
+        _lastPosition = TimeSpan.Zero;
+    }
+
     private void StopProgressTimer()
     {
         _progressTimer.Change(System.Threading.Timeout.InfiniteTimeSpan, System.Threading.Timeout.InfiniteTimeSpan);
@@ -693,20 +755,25 @@ internal sealed class MainWindow : Window
 
         try
         {
+            int generation = Volatile.Read(ref _playbackGeneration);
             (TimeSpan? position, TimeSpan? duration) = await _audioPlayer.GetProgressAsync();
             _app.Invoke(() =>
             {
-                if (!_stopping)
+                if (_stopping || generation != Volatile.Read(ref _playbackGeneration))
                 {
-                    _nowPlayingPane.SetProgress(position, duration);
-                    if (position is { } currentPosition)
-                    {
-                        _mediaSession.UpdatePosition(currentPosition);
-                    }
+                    return;
+                }
+
+                _nowPlayingPane.SetProgress(position, duration);
+                if (position is { } currentPosition)
+                {
+                    _lastPosition = currentPosition;
+                    _mediaSession.UpdateProgress(currentPosition, duration);
                 }
             });
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException)
+        catch (Exception exception)
+            when (exception is InvalidOperationException or IOException or TimeoutException or ObjectDisposedException)
         {
         }
         finally

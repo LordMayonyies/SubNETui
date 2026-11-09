@@ -23,11 +23,15 @@ public interface IMediaSession : IDisposable
 
     event EventHandler? StopRequested;
 
+    event EventHandler<TimeSpan>? SeekRequested;
+
     void UpdateTrack(Song? song, Uri? artworkUri);
 
     void UpdatePlaybackState(PlaybackState state);
 
-    void UpdatePosition(TimeSpan position);
+    void UpdateProgress(TimeSpan position, TimeSpan? duration);
+
+    void NotifySeeked(TimeSpan position);
 }
 
 internal sealed class NullMediaSession : IMediaSession
@@ -68,6 +72,12 @@ internal sealed class NullMediaSession : IMediaSession
         remove { }
     }
 
+    public event EventHandler<TimeSpan>? SeekRequested
+    {
+        add { }
+        remove { }
+    }
+
     public void UpdateTrack(Song? song, Uri? artworkUri)
     {
     }
@@ -76,7 +86,11 @@ internal sealed class NullMediaSession : IMediaSession
     {
     }
 
-    public void UpdatePosition(TimeSpan position)
+    public void UpdateProgress(TimeSpan position, TimeSpan? duration)
+    {
+    }
+
+    public void NotifySeeked(TimeSpan position)
     {
     }
 

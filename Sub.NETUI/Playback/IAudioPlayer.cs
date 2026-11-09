@@ -14,5 +14,7 @@ public interface IAudioPlayer : IDisposable
 
     Task StopAsync(CancellationToken cancellationToken = default);
 
+    Task SeekAsync(TimeSpan position, CancellationToken cancellationToken = default);
+
     Task<(TimeSpan? Position, TimeSpan? Duration)> GetProgressAsync(CancellationToken cancellationToken = default);
 }

@@ -72,6 +72,18 @@ public sealed class MpvAudioPlayer : IAudioPlayer
         IsPaused = false;
     }
 
+    public async Task SeekAsync(TimeSpan position, CancellationToken cancellationToken = default)
+    {
+        if (!IsPlaying)
+        {
+            return;
+        }
+
+        await SendCommandAsync(
+            ["seek", Math.Max(0, position.TotalSeconds), "absolute"],
+            cancellationToken);
+    }
+
     public async Task<(TimeSpan? Position, TimeSpan? Duration)> GetProgressAsync(
         CancellationToken cancellationToken = default)
     {
@@ -223,8 +235,11 @@ public sealed class MpvAudioPlayer : IAudioPlayer
                         case bool boolean:
                             writer.WriteBooleanValue(boolean);
                             break;
+                        case double number:
+                            writer.WriteNumberValue(number);
+                            break;
                         default:
-                            throw new ArgumentException("Tipo de argumento IPC no admitido.", nameof(arguments));
+                            throw new ArgumentException("Unsupported IPC argument type.", nameof(arguments));
                     }
                 }
 

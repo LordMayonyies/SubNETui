@@ -11,6 +11,8 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
     private const string MediaPlayerInterface = "org.mpris.MediaPlayer2";
     private const string PlayerInterface = "org.mpris.MediaPlayer2.Player";
     private const string PropertiesInterface = "org.freedesktop.DBus.Properties";
+    private const uint PrimaryOwner = 1;
+    private static readonly TimeSpan SeekedThreshold = TimeSpan.FromSeconds(1);
 
     private static readonly ReadOnlyMemory<byte> MediaPlayerInterfaceXml =
         """
@@ -36,6 +38,13 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
           <method name="PlayPause"/>
           <method name="Stop"/>
           <method name="Play"/>
+          <method name="Seek">
+            <arg name="Offset" direction="in" type="x"/>
+          </method>
+          <method name="SetPosition">
+            <arg name="TrackId" direction="in" type="o"/>
+            <arg name="Position" direction="in" type="x"/>
+          </method>
           <property name="PlaybackStatus" type="s" access="read"/>
           <property name="LoopStatus" type="s" access="read"/>
           <property name="Rate" type="d" access="read"/>
@@ -86,6 +95,7 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
     private readonly object _stateLock = new();
     private Song? _song;
     private Uri? _artworkUri;
+    private TimeSpan? _length;
     private PlaybackState _playbackState = PlaybackState.Stopped;
     private TimeSpan _position;
     private long _positionTimestamp = Stopwatch.GetTimestamp();
@@ -113,6 +123,8 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
 
     public event EventHandler? StopRequested;
 
+    public event EventHandler<TimeSpan>? SeekRequested;
+
     public static async Task<IMediaSession> CreateAsync()
     {
         var session = await CreateCoreAsync().ConfigureAwait(false);
@@ -136,8 +148,14 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
         {
             connection = new DBusConnection(address);
             await connection.ConnectAsync().ConfigureAwait(false);
-            uint result = await RequestBusNameAsync(connection).ConfigureAwait(false);
-            if (result != 1)
+            uint result = await RequestBusNameAsync(connection, BusName).ConfigureAwait(false);
+            if (result != PrimaryOwner)
+            {
+                result = await RequestBusNameAsync(connection, $"{BusName}.instance{Environment.ProcessId}")
+                    .ConfigureAwait(false);
+            }
+
+            if (result != PrimaryOwner)
             {
                 connection.Dispose();
                 return new NullMediaSession();
@@ -161,13 +179,16 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
         {
             _song = song;
             _artworkUri = artworkUri;
+            _length = song?.Duration is > 0 ? TimeSpan.FromSeconds(song.Duration.Value) : null;
             _trackObjectPath = song is null
                 ? "/org/mpris/MediaPlayer2/TrackList/NoTrack"
                 : $"/org/mpris/MediaPlayer2/track/{Guid.NewGuid():N}";
             SetPosition(TimeSpan.Zero);
             changed = new Dictionary<string, VariantValue>
             {
-                ["Metadata"] = CreateMetadata()
+                ["Metadata"] = CreateMetadata(),
+                ["CanPlay"] = song is not null,
+                ["CanSeek"] = song is not null
             };
         }
 
@@ -188,19 +209,40 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
             new Dictionary<string, VariantValue> { ["PlaybackStatus"] = PlaybackStatusValue(state) });
     }
 
-    public void UpdatePosition(TimeSpan position)
+    public void UpdateProgress(TimeSpan position, TimeSpan? duration)
     {
         bool seeked;
+        Dictionary<string, VariantValue>? changed = null;
         lock (_stateLock)
         {
-            seeked = (position - CurrentPosition()).Duration() > TimeSpan.FromSeconds(1.5);
+            seeked = (position - CurrentPosition()).Duration() > SeekedThreshold;
             SetPosition(position);
+            if (_song is not null && _length is null && duration > TimeSpan.Zero)
+            {
+                _length = duration;
+                changed = new Dictionary<string, VariantValue> { ["Metadata"] = CreateMetadata() };
+            }
+        }
+
+        if (changed is not null)
+        {
+            EmitPropertiesChanged(PlayerInterface, changed);
         }
 
         if (seeked)
         {
             EmitSeeked(position);
         }
+    }
+
+    public void NotifySeeked(TimeSpan position)
+    {
+        lock (_stateLock)
+        {
+            SetPosition(position);
+        }
+
+        EmitSeeked(position);
     }
 
     public ValueTask HandleMethodAsync(MethodContext context)
@@ -254,7 +296,7 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
         _connection.Dispose();
     }
 
-    private static async Task<uint> RequestBusNameAsync(DBusConnection connection)
+    private static async Task<uint> RequestBusNameAsync(DBusConnection connection, string busName)
     {
         MessageBuffer message;
         using (var writer = connection.GetMessageWriter())
@@ -265,7 +307,7 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
                 @interface: "org.freedesktop.DBus",
                 member: "RequestName",
                 signature: "su");
-            writer.WriteString(BusName);
+            writer.WriteString(busName);
             writer.WriteUInt32(4);
             message = writer.CreateMessage();
         }
@@ -322,6 +364,20 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
 
     private void HandlePlayerRequest(MethodContext context, string? methodName, string? signature)
     {
+        switch ((methodName, signature))
+        {
+            case ("Seek", "x"):
+                HandleSeek(context, context.Request.GetBodyReader().ReadInt64());
+                return;
+            case ("SetPosition", "ox"):
+            {
+                var reader = context.Request.GetBodyReader();
+                string trackId = reader.ReadObjectPathAsString();
+                HandleSetPosition(context, trackId, reader.ReadInt64());
+                return;
+            }
+        }
+
         if (signature == "")
         {
             EventHandler? requested = methodName switch
@@ -347,6 +403,68 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
         }
 
         context.ReplyUnknownMethodError();
+    }
+
+    private void HandleSeek(MethodContext context, long offsetMicroseconds)
+    {
+        TimeSpan target;
+        bool pastEnd;
+        lock (_stateLock)
+        {
+            if (_song is null)
+            {
+                ReplyEmpty(context);
+                return;
+            }
+
+            target = CurrentPosition() + TimeSpan.FromMicroseconds(offsetMicroseconds);
+            pastEnd = _length is { } length && target > length;
+        }
+
+        if (pastEnd)
+        {
+            if (NextRequested is { } next)
+            {
+                InvokeSafely(next);
+            }
+        }
+        else
+        {
+            RequestSeek(target < TimeSpan.Zero ? TimeSpan.Zero : target);
+        }
+
+        ReplyEmpty(context);
+    }
+
+    private void HandleSetPosition(MethodContext context, string trackId, long positionMicroseconds)
+    {
+        TimeSpan target = TimeSpan.FromMicroseconds(positionMicroseconds);
+        bool valid;
+        lock (_stateLock)
+        {
+            valid = _song is not null &&
+                    trackId == _trackObjectPath &&
+                    target >= TimeSpan.Zero &&
+                    (_length is null || target <= _length);
+        }
+
+        if (valid)
+        {
+            RequestSeek(target);
+        }
+
+        ReplyEmpty(context);
+    }
+
+    private void RequestSeek(TimeSpan position)
+    {
+        try
+        {
+            SeekRequested?.Invoke(this, position);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+        }
     }
 
     private bool TryGetProperties(string interfaceName, out Dictionary<string, VariantValue> properties)
@@ -385,7 +503,7 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
                     ["CanGoPrevious"] = true,
                     ["CanPlay"] = _song is not null,
                     ["CanPause"] = true,
-                    ["CanSeek"] = false,
+                    ["CanSeek"] = _song is not null,
                     ["CanControl"] = true
                 };
                 return true;
@@ -411,8 +529,12 @@ internal sealed class MprisMediaSession : IMediaSession, IPathMethodHandler
             ["mpris:trackid"] = VariantValue.ObjectPath(new ObjectPath(_trackObjectPath)),
             ["xesam:title"] = _song.Title,
             ["xesam:artist"] = new Tmds.DBus.Protocol.Array<string>([_song.Artist ?? string.Empty]),
-            ["mpris:length"] = (long)(_song.Duration ?? 0) * 1_000_000
         };
+        if (_length is { } length)
+        {
+            metadata["mpris:length"] = ToMicroseconds(length);
+        }
+
         if (!string.IsNullOrWhiteSpace(_song.Album))
         {
             metadata["xesam:album"] = _song.Album;

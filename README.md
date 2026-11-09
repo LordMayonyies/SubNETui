@@ -40,17 +40,17 @@ Native AOT creates a native executable for the runtime specified with `-r`; choo
 - Letters: jump to the first artist, album, or track whose name starts with that letter (`ListView` incremental search).
 - Digits in the tracks pane: select a track by its track number; type consecutive digits (for example, `1` then `2` for track 12) within one second.
 - `Ctrl+Space`: pause or resume; `Ctrl+S`: stop.
-- `Ctrl+N` / `Ctrl+P`: next / previous track; `Ctrl+Q`: quit.
+- `Ctrl+N` / `Ctrl+P`: next / previous track (previous restarts the current track if more than 3 seconds have played); `Ctrl+Q`: quit.
 
 Playback shortcuts intentionally use `Ctrl`, leaving unmodified letter keys available for list navigation.
 
 ### Desktop media keys
 
-On Linux, Sub.NETUI registers an MPRIS player on the D-Bus session bus (`Playback/MprisMediaSession.cs`, using `Tmds.DBus.Protocol`), so desktop shells show the current track and keyboard media keys (Play/Pause, Next, Previous, Stop) control playback while the terminal is unfocused.
+On Linux, Sub.NETUI registers an MPRIS player on the D-Bus session bus (`Playback/MprisMediaSession.cs`, using `Tmds.DBus.Protocol`), so desktop shells show the current track and its progress, keyboard media keys (Play/Pause, Next, Previous, Stop) control playback while the terminal is unfocused, and dragging the shell's progress bar seeks within the track.
 
 - The player is published as `org.mpris.MediaPlayer2.subnetui` (inspect it with `busctl --user introspect org.mpris.MediaPlayer2.subnetui /org/mpris/MediaPlayer2`).
 - `MainWindow` publishes track changes, playback state, playback position, and album artwork to the media session, and routes incoming media requests to the UI thread with `app.Invoke`.
-- If no session bus is available, or another instance already owns the name, the app falls back to a no-op `NullMediaSession` and keeps working normally.
+- If another instance already owns the name, the player is published as `org.mpris.MediaPlayer2.subnetui.instance<pid>`. If no session bus is available, the app falls back to a no-op `NullMediaSession` and keeps working normally.
 
 Not implemented: Windows (SMTC) and macOS (Now Playing). Other operating systems use the no-op media session.
 
