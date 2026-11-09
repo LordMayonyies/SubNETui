@@ -10,6 +10,8 @@ namespace Sub.NETUI;
 
 internal static class Program
 {
+    private static readonly TimeSpan SessionFlushTimeout = TimeSpan.FromSeconds(3);
+
     private static async Task<int> Main(string[] args)
     {
         if (args is ["daemon", "stop"])
@@ -44,6 +46,7 @@ internal static class Program
         using IMediaSession mediaSession = await MprisMediaSession.CreateAsync();
         var subsonicClient = new SubsonicClient(httpClient, settings!);
         using var playback = new PlaybackController(audioPlayer, new PlaybackQueue(), mediaSession, subsonicClient);
+        using var sessionSync = new NavidromeSessionSync(playback, subsonicClient);
         using var daemon = new PlaybackDaemon(
             playback,
             DaemonEndpoint.SocketPath,
@@ -54,7 +57,9 @@ internal static class Program
         using var interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, OnSignal);
         try
         {
+            _ = sessionSync.RestoreAsync();
             await daemon.RunAsync();
+            await sessionSync.FlushAsync(SessionFlushTimeout);
             return 0;
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException
@@ -92,6 +97,7 @@ internal static class Program
 
         var subsonicClient = new SubsonicClient(httpClient, settings!);
         var resources = new Stack<IDisposable>();
+        NavidromeSessionSync? sessionSync = null;
         try
         {
             IPlaybackService playback;
@@ -107,10 +113,18 @@ internal static class Program
                                                   or ArgumentException or System.ComponentModel.Win32Exception)
             {
                 fallbackReason = exception.Message;
-                playback = await CreateInProcessPlaybackAsync(subsonicClient, resources);
+                var controller = await CreateInProcessPlaybackAsync(subsonicClient, resources);
+                sessionSync = new NavidromeSessionSync(controller, subsonicClient);
+                resources.Push(sessionSync);
+                _ = sessionSync.RestoreAsync();
+                playback = controller;
             }
 
             RunMainWindow(app, subsonicClient, playback, fallbackReason);
+            if (sessionSync is not null)
+            {
+                await sessionSync.FlushAsync(SessionFlushTimeout);
+            }
         }
         finally
         {
@@ -121,7 +135,7 @@ internal static class Program
         }
     }
 
-    private static async Task<IPlaybackService> CreateInProcessPlaybackAsync(
+    private static async Task<PlaybackController> CreateInProcessPlaybackAsync(
         SubsonicClient subsonicClient,
         Stack<IDisposable> resources)
     {

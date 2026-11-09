@@ -9,6 +9,7 @@ namespace Sub.NETUI.Daemon;
 public sealed class PlaybackDaemon : IDisposable
 {
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan PausedIdleTimeout = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(2);
     private readonly PlaybackController _playback;
     private readonly string _socketPath;
@@ -272,10 +273,17 @@ public sealed class PlaybackDaemon : IDisposable
 
     private void UpdateIdleTimer()
     {
-        bool idle = _clients.IsEmpty && !_playback.IsActive;
+        TimeSpan timeout = !_clients.IsEmpty
+            ? Timeout.InfiniteTimeSpan
+            : _playback.Current.State switch
+            {
+                PlaybackState.Stopped => IdleTimeout,
+                PlaybackState.Paused => PausedIdleTimeout,
+                _ => Timeout.InfiniteTimeSpan
+            };
         try
         {
-            _idleTimer.Change(idle ? IdleTimeout : Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _idleTimer.Change(timeout, Timeout.InfiniteTimeSpan);
         }
         catch (ObjectDisposedException)
         {
@@ -284,7 +292,7 @@ public sealed class PlaybackDaemon : IDisposable
 
     private void OnIdleTimerElapsed()
     {
-        if (_clients.IsEmpty && !_playback.IsActive)
+        if (_clients.IsEmpty && _playback.Current.State != PlaybackState.Playing)
         {
             RequestShutdown();
         }

@@ -8,6 +8,7 @@ public sealed record PlaybackProgress(TimeSpan? Position, TimeSpan? Duration);
 
 public sealed class PlaybackController : IPlaybackService, IDisposable
 {
+    public const string EndOfQueueMessage = "End of album";
     private static readonly TimeSpan RestartThreshold = TimeSpan.FromSeconds(3);
     private readonly IAudioPlayer _audioPlayer;
     private readonly PlaybackQueue _queue;
@@ -19,6 +20,7 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
     private int _cuedIndex = -1;
     private TimeSpan _lastPosition;
     private TimeSpan? _lastDuration;
+    private TimeSpan? _resumePosition;
     private volatile PlaybackSnapshot _current = new(null, PlaybackState.Stopped, null);
     private volatile PlaybackProgress _progress = new(null, null);
     private bool _disposed;
@@ -64,17 +66,49 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
 
     public bool IsActive => _current.State != PlaybackState.Stopped;
 
+    public IReadOnlyList<Song> QueueTracks => _queue.Tracks;
+
+    public int QueueIndex => _queue.CurrentIndex;
+
     public Task CueAsync(IReadOnlyList<Song> tracks, int index, Uri? artworkUri)
     {
         return RunAsync(() =>
         {
-            if (!_audioPlayer.IsPlaying)
+            if (_current.State == PlaybackState.Stopped)
             {
                 _queue.SetTracks(tracks);
                 _cuedIndex = index;
                 _artworkUri = artworkUri;
             }
 
+            return Task.CompletedTask;
+        });
+    }
+
+    public Task RestoreAsync(IReadOnlyList<Song> tracks, int index, TimeSpan position, Uri? artworkUri)
+    {
+        return RunAsync(() =>
+        {
+            if (_current.State != PlaybackState.Stopped || _current.Track is not null)
+            {
+                return Task.CompletedTask;
+            }
+
+            _queue.SetTracks(tracks);
+            if (_queue.StartAt(index) is not { } song)
+            {
+                return Task.CompletedTask;
+            }
+
+            _artworkUri = artworkUri;
+            _resumePosition = position;
+            _lastPosition = position;
+            _lastDuration = song.Duration is { } seconds ? TimeSpan.FromSeconds(seconds) : null;
+            _mediaSession.UpdateTrack(song, artworkUri);
+            _mediaSession.UpdatePlaybackState(PlaybackState.Paused);
+            _mediaSession.UpdateProgress(position, _lastDuration);
+            Publish(new PlaybackSnapshot(song, PlaybackState.Paused, null));
+            PublishProgress(new PlaybackProgress(position, _lastDuration));
             return Task.CompletedTask;
         });
     }
@@ -136,6 +170,7 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
         {
             StopProgressTimer();
             await _audioPlayer.StopAsync();
+            _resumePosition = null;
             _lastPosition = TimeSpan.Zero;
             _mediaSession.UpdatePlaybackState(PlaybackState.Stopped);
             Publish(new PlaybackSnapshot(_current.Track, PlaybackState.Stopped, "Playback stopped"));
@@ -151,7 +186,7 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
     {
         return RunAsync(async () =>
         {
-            if (_audioPlayer.IsPlaying && _lastPosition > RestartThreshold)
+            if ((_audioPlayer.IsPlaying || _resumePosition is not null) && _lastPosition > RestartThreshold)
             {
                 await SeekCoreAsync(TimeSpan.Zero);
             }
@@ -196,7 +231,7 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
     {
         if (_queue.CurrentTrack is not null)
         {
-            await StartAtAsync(_queue.CurrentIndex);
+            await StartAtAsync(_queue.CurrentIndex, _resumePosition ?? TimeSpan.Zero);
         }
         else if (_cuedIndex >= 0)
         {
@@ -204,7 +239,7 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
         }
     }
 
-    private async Task StartAtAsync(int index)
+    private async Task StartAtAsync(int index, TimeSpan startPosition = default)
     {
         Song? song = _queue.StartAt(index);
         if (song is null)
@@ -214,12 +249,13 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
         }
 
         StopProgressTimer();
-        _lastPosition = TimeSpan.Zero;
+        _resumePosition = null;
+        _lastPosition = startPosition;
         _lastDuration = null;
-        _progress = new PlaybackProgress(null, null);
+        _progress = new PlaybackProgress(startPosition, null);
         try
         {
-            await _audioPlayer.PlayAsync(_subsonicClient.BuildStreamUri(song.Id));
+            await _audioPlayer.PlayAsync(_subsonicClient.BuildStreamUri(song.Id), startPosition);
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException
                                               or TimeoutException or System.ComponentModel.Win32Exception)
@@ -260,12 +296,19 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
 
     private async Task SeekCoreAsync(TimeSpan position)
     {
-        if (!_audioPlayer.IsPlaying)
+        if (_resumePosition is not null)
+        {
+            _resumePosition = position;
+        }
+        else if (_audioPlayer.IsPlaying)
+        {
+            await _audioPlayer.SeekAsync(position);
+        }
+        else
         {
             return;
         }
 
-        await _audioPlayer.SeekAsync(position);
         _lastPosition = position;
         _mediaSession.NotifySeeked(position);
         PublishProgress(new PlaybackProgress(position, _lastDuration));
@@ -284,7 +327,7 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
             StopProgressTimer();
             _lastPosition = TimeSpan.Zero;
             _mediaSession.UpdatePlaybackState(PlaybackState.Stopped);
-            Publish(new PlaybackSnapshot(_current.Track, PlaybackState.Stopped, "End of album"));
+            Publish(new PlaybackSnapshot(_current.Track, PlaybackState.Stopped, EndOfQueueMessage));
         });
     }
 

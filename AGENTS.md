@@ -16,7 +16,7 @@ There is no automated test project yet. The TUI cannot be checked interactively 
 
 - `Sub.NETUI/Configuration`: settings loading/saving (env vars override `~/.config/subnetui/config.json`).
 - `Sub.NETUI/Subsonic`: models, `SubsonicClient`, `SubsonicJsonContext`, API errors.
-- `Sub.NETUI/Playback`: `IAudioPlayer` / `MpvAudioPlayer` (mpv over IPC), `PlaybackQueue`, `IMediaSession` / `MprisMediaSession` / `NullMediaSession`, `IPlaybackService`, implemented by `PlaybackController` (UI-agnostic playback logic, runs in the daemon or in-process as a fallback) and `DaemonPlaybackClient`.
+- `Sub.NETUI/Playback`: `IAudioPlayer` / `MpvAudioPlayer` (mpv over IPC), `PlaybackQueue`, `IMediaSession` / `MprisMediaSession` / `NullMediaSession`, `IPlaybackService`, implemented by `PlaybackController` (UI-agnostic playback logic, runs in the daemon or in-process as a fallback) and `DaemonPlaybackClient`. `NavidromeSessionSync` listens to the controller to scrobble and save/restore the play queue on the server.
 - `Sub.NETUI/Daemon`: `subnetui daemon` mode (`PlaybackDaemon`, Unix socket server), `DaemonPlaybackClient` (TUI side, starts the daemon if needed), `ProcessDetacher` (`setsid` + stdio to `/dev/null`), `DaemonControl` (`subnetui daemon stop`), and `DaemonProtocol` (JSON-lines commands/events, `DaemonJsonContext`).
 - `Sub.NETUI/UI`: `LoginWindow`, `MainWindow` (coordinator), reusable panes (`LibraryListPane<T>` and subclasses), `NowPlayingPane`, `StatusBar`.
 - `Sub.NETUI/Program.cs`: composition root (Pure DI, no container).
@@ -28,6 +28,7 @@ There is no automated test project yet. The TUI cannot be checked interactively 
 - **UI thread.** Await network/player/D-Bus work off the UI thread and apply results with `app.Invoke(...)`. Never block the main loop.
 - **D-Bus threads.** `Tmds.DBus.Protocol` runs `await` continuations of call replies inline on its receive loop. Never block after awaiting a D-Bus call without first leaving that thread (`MprisMediaSession.CreateAsync` ends with `await Task.Yield()` so `app.Run` does not stall incoming calls).
 - **Daemon protocol.** Daemon clients may write a command and close at once, so never let a failed write to a client discard commands it already sent. Keep `DaemonCommand`/`DaemonEvent` changes backward compatible or tell users to run `subnetui daemon stop` after upgrading.
+- **Navidrome sync.** Scrobble and play queue calls are best effort: catch and ignore server errors, never block playback on them, and only count listened time (not seeks) towards scrobbles. Testing against a real server records real plays and overwrites the user's saved play queue, so back it up first.
 - **Do not write to stdout/stderr** while the TUI is running; it corrupts the terminal.
 - **Terminal.Gui focus.** Container `SuperView`s need `CanFocus = true`. Global shortcuts go through `app.Keyboard.KeyDown`. Playback shortcuts use `Ctrl` so plain letters stay free for list search.
 - **Cancellation.** Selection-driven loads use a `CancellationToken` and ignore stale results.

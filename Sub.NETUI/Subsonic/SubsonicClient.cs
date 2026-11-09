@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Sub.NETUI.Configuration;
@@ -40,6 +41,45 @@ public sealed class SubsonicClient(HttpClient httpClient, AppSettings settings)
         var response = await GetResponseAsync("getAlbum", [("id", albumId)], cancellationToken);
         return response.Response!.Album ??
                throw new SubsonicException("The Navidrome response does not contain the requested album.");
+    }
+
+    public async Task ScrobbleAsync(
+        string songId,
+        bool submission,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken = default)
+    {
+        await GetResponseAsync(
+            "scrobble",
+            [
+                ("id", songId),
+                ("submission", submission ? "true" : "false"),
+                ("time", startedAt.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture))
+            ],
+            cancellationToken);
+    }
+
+    public async Task<PlayQueue?> GetPlayQueueAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await GetResponseAsync("getPlayQueue", null, cancellationToken);
+        return response.Response!.PlayQueue;
+    }
+
+    public async Task SavePlayQueueAsync(
+        IReadOnlyList<string> songIds,
+        string? currentId,
+        TimeSpan position,
+        CancellationToken cancellationToken = default)
+    {
+        var parameters = songIds.Select(id => ("id", id)).ToList();
+        if (currentId is not null)
+        {
+            parameters.Add(("current", currentId));
+            parameters.Add(("position",
+                ((long)position.TotalMilliseconds).ToString(CultureInfo.InvariantCulture)));
+        }
+
+        await GetResponseAsync("savePlayQueue", parameters.ToArray(), cancellationToken);
     }
 
     public Uri BuildStreamUri(string songId)

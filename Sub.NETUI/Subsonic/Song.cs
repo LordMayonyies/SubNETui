@@ -11,4 +11,5 @@ public sealed record Song(
     string? ContentType,
     int? DiscNumber,
     string? AlbumId,
-    string? ArtistId);
+    string? ArtistId,
+    string? CoverArt = null);

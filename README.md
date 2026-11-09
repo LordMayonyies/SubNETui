@@ -41,9 +41,19 @@ Ways to shut the daemon down:
 - `subnetui daemon stop` from a shell. It waits until the process has exited, and kills it (together with `mpv`) if it does not respond within five seconds. Run it after installing a new build so the next TUI starts the new daemon.
 - The desktop player's quit action (MPRIS `Quit`).
 - `SIGTERM` or `SIGINT`.
-- Automatically, five minutes after playback stops when no TUI is connected.
+- Automatically when no TUI is connected: five minutes after playback stops, or thirty minutes after it is paused. The play queue is saved on Navidrome first, so nothing is lost.
 
 The protocol is one JSON object per line. Clients send commands such as `{"type":"play-queue","tracks":[...],"index":0}`, `{"type":"toggle-pause"}`, or `{"type":"seek","position":42.5}`; the daemon sends `state`, `progress`, and `notice` events, starting with the current state when a client connects. `subnetui daemon --detach` is what the TUI uses to start it.
+
+### Navidrome sync
+
+Playback is reported to Navidrome (`Playback/NavidromeSessionSync.cs`), so other clients and the web UI see what Sub.NETUI plays:
+
+- **Now playing**: every time a track starts or resumes, Sub.NETUI calls `scrobble` with `submission=false`, and Navidrome shows the track under the `SubNETUI` client.
+- **Scrobbles**: after half the track or four minutes of actual listening (whichever comes first; seeking does not count), it calls `scrobble` with `submission=true`. This updates play counts and is forwarded to Last.fm or ListenBrainz if they are linked in Navidrome.
+- **Resume**: the queue, current track, and position are saved with `savePlayQueue` when the track changes, on pause and stop, every 30 seconds while playing, and on shutdown (including `SIGTERM` when the computer shuts down). On startup the daemon loads them with `getPlayQueue` and restores the track **paused**; `Ctrl+Space` or the media keys resume from the saved position. Queues saved by other clients that support play queues are restored too. Stopping resets the saved position to the start of the track, and finishing the album clears the saved queue.
+
+Server errors are ignored so they never interrupt playback.
 
 Native AOT creates a native executable for the runtime specified with `-r`; choose the runtime identifier for your OS and architecture. Configuration and Subsonic responses use `System.Text.Json` source generation to avoid dynamic reflection during publishing. `mpv` is an external process and is not included in the executable.
 
@@ -66,7 +76,7 @@ Playback shortcuts intentionally use `Ctrl`, leaving unmodified letter keys avai
 On Linux, Sub.NETUI registers an MPRIS player on the D-Bus session bus (`Playback/MprisMediaSession.cs`, using `Tmds.DBus.Protocol`), so desktop shells show the current track and its progress, keyboard media keys (Play/Pause, Next, Previous, Stop) control playback while the terminal is unfocused, and dragging the shell's progress bar seeks within the track.
 
 - The player is published as `org.mpris.MediaPlayer2.subnetui` (inspect it with `busctl --user introspect org.mpris.MediaPlayer2.subnetui /org/mpris/MediaPlayer2`).
-- `MainWindow` publishes track changes, playback state, playback position, and album artwork to the media session, and routes incoming media requests to the UI thread with `app.Invoke`.
+- `PlaybackController` publishes track changes, playback state, playback position, and album artwork to the media session, and runs incoming media requests through the same command queue as the TUI.
 - If another instance already owns the name, the player is published as `org.mpris.MediaPlayer2.subnetui.instance<pid>`. If no session bus is available, the app falls back to a no-op `NullMediaSession` and keeps working normally.
 
 Not implemented: Windows (SMTC) and macOS (Now Playing). Other operating systems use the no-op media session.
@@ -77,7 +87,7 @@ The player displays a useful error if `mpv` is missing or cannot start. The prog
 
 - `Configuration`: runtime settings, environment-variable precedence, and source-generated JSON serialization.
 - `Subsonic`: models, HTTP client, and API errors. Each request creates a random `salt` and the MD5 token required by Subsonic; the same `HttpClient` is reused for the lifetime of the application.
-- `Playback`: track queue, `IAudioPlayer`, and `IMediaSession` contracts. `PlaybackController` owns the queue, player, media session, and progress tracking, and serializes every command. `MpvAudioPlayer` manages a headless process and IPC channel for commands and end-of-track events; `MprisMediaSession` exposes playback to Linux desktop controls over D-Bus.
+- `Playback`: track queue, `IAudioPlayer`, and `IMediaSession` contracts. `PlaybackController` owns the queue, player, media session, and progress tracking, and serializes every command. `MpvAudioPlayer` manages a headless process and IPC channel for commands and end-of-track events; `MprisMediaSession` exposes playback to Linux desktop controls over D-Bus. `NavidromeSessionSync` reports now playing, scrobbles, and saves and restores the play queue on the server.
 - `Daemon`: `subnetui daemon` mode. `PlaybackDaemon` hosts a `PlaybackController` behind a Unix socket; `DaemonProtocol` defines the JSON-lines commands and events.
 - `UI`: `MainWindow` coordinates views and selection flow; views do not access HTTP directly. `LibraryListPane<T>` keeps typed models and displays their names in a Terminal.Gui `ListView`.
 - `Program`: manual dependency composition (Pure DI), configuration, and Terminal.Gui startup.

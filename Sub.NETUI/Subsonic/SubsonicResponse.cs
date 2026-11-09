@@ -5,4 +5,5 @@ internal sealed record SubsonicResponse(
     SubsonicError? Error,
     ArtistsData? Artists,
     ArtistData? Artist,
-    Album? Album);
+    Album? Album,
+    PlayQueue? PlayQueue);

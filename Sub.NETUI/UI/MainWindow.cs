@@ -341,17 +341,14 @@ internal sealed class MainWindow : Window
 
             switch (snapshot.State)
             {
-                case PlaybackState.Playing:
+                case PlaybackState.Playing or PlaybackState.Paused:
                     if (_displayedTrack != snapshot.Track && snapshot.Track is { } track)
                     {
                         _nowPlayingPane.SetTrack(track.Artist ?? string.Empty, track.Title);
                     }
 
                     _displayedTrack = snapshot.Track;
-                    _statusBar.SetStatus(null);
-                    break;
-                case PlaybackState.Paused:
-                    _statusBar.SetStatus("Playback paused.");
+                    _statusBar.SetStatus(snapshot.State == PlaybackState.Paused ? "Playback paused." : null);
                     break;
                 default:
                     _displayedTrack = null;

@@ -8,6 +8,7 @@ namespace Sub.NETUI.Subsonic;
 [JsonSerializable(typeof(AlbumSummary))]
 [JsonSerializable(typeof(Album))]
 [JsonSerializable(typeof(Song))]
+[JsonSerializable(typeof(PlayQueue))]
 [JsonSerializable(typeof(SubsonicError))]
 [JsonSerializable(typeof(ArtistsData))]
 [JsonSerializable(typeof(ArtistData))]

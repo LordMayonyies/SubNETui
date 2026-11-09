@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Text;
@@ -27,7 +28,10 @@ public sealed class MpvAudioPlayer : IAudioPlayer
 
     public bool IsPaused { get; private set; }
 
-    public async Task PlayAsync(Uri streamUri, CancellationToken cancellationToken = default)
+    public async Task PlayAsync(
+        Uri streamUri,
+        TimeSpan startPosition = default,
+        CancellationToken cancellationToken = default)
     {
         await _lifecycleGate.WaitAsync(cancellationToken);
         try
@@ -38,6 +42,9 @@ public sealed class MpvAudioPlayer : IAudioPlayer
                 await StartPlayerAsync(cancellationToken);
             }
 
+            // "start" applies to every file loaded afterwards, so it is set on each load.
+            string start = Math.Max(0, startPosition.TotalSeconds).ToString("0.###", CultureInfo.InvariantCulture);
+            await SendCommandAsync(["set_property", "start", start], cancellationToken);
             await SendCommandAsync(["loadfile", streamUri.AbsoluteUri, "replace"], cancellationToken);
             IsPlaying = true;
             IsPaused = false;

@@ -8,7 +8,7 @@ public interface IAudioPlayer : IDisposable
 
     bool IsPaused { get; }
 
-    Task PlayAsync(Uri streamUri, CancellationToken cancellationToken = default);
+    Task PlayAsync(Uri streamUri, TimeSpan startPosition = default, CancellationToken cancellationToken = default);
 
     Task TogglePauseAsync(CancellationToken cancellationToken = default);
 
