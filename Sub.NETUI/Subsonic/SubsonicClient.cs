@@ -82,9 +82,11 @@ public sealed class SubsonicClient(HttpClient httpClient, AppSettings settings)
         await GetResponseAsync("savePlayQueue", parameters.ToArray(), cancellationToken);
     }
 
-    public Uri BuildStreamUri(string songId)
+    public Uri BuildStreamUri(string songId, string? format = null)
     {
-        return BuildUri("stream", [("id", songId)]);
+        return string.IsNullOrEmpty(format)
+            ? BuildUri("stream", [("id", songId)])
+            : BuildUri("stream", [("id", songId), ("format", format)]);
     }
 
     public Uri? BuildCoverArtUri(string? coverArtId)

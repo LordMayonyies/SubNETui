@@ -1,3 +1,5 @@
+using Sub.NETUI.Subsonic;
+
 namespace Sub.NETUI.Playback;
 
 public interface IAudioPlayer : IDisposable
@@ -7,6 +9,9 @@ public interface IAudioPlayer : IDisposable
     bool IsPlaying { get; }
 
     bool IsPaused { get; }
+
+    /// <summary>The format Navidrome should transcode the song to, or <c>null</c> to stream the original file.</summary>
+    string? GetStreamFormat(Song song) => null;
 
     Task PlayAsync(Uri streamUri, TimeSpan startPosition = default, CancellationToken cancellationToken = default);
 

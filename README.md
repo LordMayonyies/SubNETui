@@ -1,13 +1,14 @@
 # Sub.NETUI
 
-Sub.NETUI is a terminal UI for browsing a Navidrome library through its Subsonic-compatible API and playing music with `mpv`.
+Sub.NETUI is a terminal UI for browsing a Navidrome library through its Subsonic-compatible API and playing music with `mpv` (Linux) or the built-in AVPlayer (macOS).
 
 ## Requirements and configuration
 
 - .NET 10 SDK to build the application.
 - An HTTP/HTTPS-accessible Navidrome instance and its credentials.
-- `mpv` installed and available on `PATH` for audio playback.
+- On Linux, `mpv` installed and available on `PATH` for audio playback.
 - On Linux, a D-Bus session bus for desktop media controls.
+- On macOS, nothing else: playback uses AVFoundation's AVPlayer (`Playback/AvAudioPlayer.cs`). It plays MP3, AAC/M4A, ALAC, FLAC, WAV, and AIFF directly and asks Navidrome to transcode other formats (Ogg Vorbis, Opus, ...) to MP3 with the `stream` endpoint's `format` parameter. Set `SUBNETUI_PLAYER=mpv` to use `mpv` instead (`brew install mpv`). Native AOT publishing needs the Xcode Command Line Tools (`xcode-select --install`).
 
 Configuration is read from `~/.config/subnetui/config.json` and can be overridden with the `NAVIDROME_URL`, `NAVIDROME_USER`, and `NAVIDROME_PASSWORD` environment variables:
 
@@ -27,19 +28,22 @@ If configuration is missing or invalid, a sign-in window opens so you can enter 
 dotnet run --project Sub.NETUI
 dotnet build Sub.NETUI.slnx
 dotnet publish Sub.NETUI/Sub.NETUI.csproj -c Release -r linux-x64
+dotnet publish Sub.NETUI/Sub.NETUI.csproj -c Release -r osx-arm64   # Apple Silicon; osx-x64 for Intel Macs
 ```
+
+The published executable is `Sub.NETUI/bin/Release/net10.0/<rid>/publish/Sub.NETUI`; keep `libonigwrap.dylib` next to it on macOS.
 
 ### Background playback
 
 Playback runs in a background daemon, so music keeps playing after you quit the TUI or close its terminal. The TUI connects to the daemon on startup, starting it if needed (detached into its own session with stdio on `/dev/null`), and shows the current track when you reopen it. If the daemon cannot be reached, the TUI falls back to in-process playback and says so in the window title.
 
-`subnetui daemon` runs playback headless: `mpv`, the queue, and the MPRIS session, with no terminal UI. It listens on `$XDG_RUNTIME_DIR/subnetui.sock` (user-only permissions), records its PID in `subnetui.pid`, and refuses to start if another daemon holds `subnetui.lock`.
+`subnetui daemon` runs playback headless: the audio player, the queue, and the MPRIS session, with no terminal UI. It listens on `$XDG_RUNTIME_DIR/subnetui.sock` (on macOS, where that variable is unset, `$TMPDIR/subnetui-<user>.sock`; user-only permissions), records its PID in `subnetui.pid`, and refuses to start if another daemon holds `subnetui.lock`.
 
 Ways to shut the daemon down:
 
 - `Ctrl+X` in the TUI.
 - `subnetui daemon stop` from a shell. It waits until the process has exited, and kills it (together with `mpv`) if it does not respond within five seconds. Run it after installing a new build so the next TUI starts the new daemon.
-- The desktop player's quit action (MPRIS `Quit`).
+- The desktop player's quit action (MPRIS `Quit`, Linux only).
 - `SIGTERM` or `SIGINT`.
 - Automatically when no TUI is connected: five minutes after playback stops, or thirty minutes after it is paused. The play queue is saved on Navidrome first, so nothing is lost.
 
@@ -78,6 +82,11 @@ On Linux, Sub.NETUI registers an MPRIS player on the D-Bus session bus (`Playbac
 - The player is published as `org.mpris.MediaPlayer2.subnetui` (inspect it with `busctl --user introspect org.mpris.MediaPlayer2.subnetui /org/mpris/MediaPlayer2`).
 - `PlaybackController` publishes track changes, playback state, playback position, and album artwork to the media session, and runs incoming media requests through the same command queue as the TUI.
 - If another instance already owns the name, the player is published as `org.mpris.MediaPlayer2.subnetui.instance<pid>`. If no session bus is available, the app falls back to a no-op `NullMediaSession` and keeps working normally.
+
+On macOS, Sub.NETUI publishes to Now Playing (`Playback/MacNowPlayingSession.cs`, using `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` through the Objective-C runtime), so Control Center and the menu bar show the current track, its progress, and album artwork; the keyboard media keys, AirPods controls, and the Control Center buttons play, pause, skip, and stop; and dragging the progress bar seeks.
+
+- MediaPlayer delivers commands on the main dispatch queue, so on macOS the main thread runs a `CFRunLoop` and the application runs on a worker thread (`Platform/MacOS/MacMainThread.cs`).
+- Because AVPlayer plays the audio inside Sub.NETUI itself, macOS treats it as the active Now Playing app. With `SUBNETUI_PLAYER=mpv`, `mpv` is started with `--input-media-keys=no` so it does not register its own Now Playing entry.
 
 Not implemented: Windows (SMTC) and macOS (Now Playing). Other operating systems use the no-op media session.
 

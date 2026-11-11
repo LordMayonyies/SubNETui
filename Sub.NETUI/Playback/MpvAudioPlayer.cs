@@ -113,8 +113,8 @@ public sealed class MpvAudioPlayer : IAudioPlayer
     {
         string pipeName = $"subnetui-{Environment.ProcessId}-{Guid.NewGuid():N}";
         _ipcAddress = OperatingSystem.IsWindows()
-            ? $"\\\\.\\pipe\\{pipeName}"
-            : Path.Combine(Path.GetTempPath(), $"subnetui-{Environment.ProcessId}-{Guid.NewGuid():N}.sock");
+            ? $@"\\.\pipe\{pipeName}"
+            : Path.Combine(Path.GetTempPath(), $"{pipeName}.sock");
 
         var startInfo = new ProcessStartInfo
         {
@@ -129,6 +129,11 @@ public sealed class MpvAudioPlayer : IAudioPlayer
         startInfo.ArgumentList.Add("--demuxer-max-bytes=8MiB");
         startInfo.ArgumentList.Add("--demuxer-max-back-bytes=2MiB");
         startInfo.ArgumentList.Add($"--input-ipc-server={_ipcAddress}");
+        if (OperatingSystem.IsMacOS())
+        {
+            // mpv would otherwise register its own Now Playing entry and take the media keys.
+            startInfo.ArgumentList.Add("--input-media-keys=no");
+        }
 
         try
         {

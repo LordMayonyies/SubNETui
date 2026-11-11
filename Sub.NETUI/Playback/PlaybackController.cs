@@ -255,7 +255,9 @@ public sealed class PlaybackController : IPlaybackService, IDisposable
         _progress = new PlaybackProgress(startPosition, null);
         try
         {
-            await _audioPlayer.PlayAsync(_subsonicClient.BuildStreamUri(song.Id), startPosition);
+            await _audioPlayer.PlayAsync(
+                _subsonicClient.BuildStreamUri(song.Id, _audioPlayer.GetStreamFormat(song)),
+                startPosition);
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException
                                               or TimeoutException or System.ComponentModel.Win32Exception)

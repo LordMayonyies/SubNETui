@@ -1,6 +1,7 @@
 ﻿using System.Runtime.InteropServices;
 using Sub.NETUI.Configuration;
 using Sub.NETUI.Daemon;
+using Sub.NETUI.Platform.MacOS;
 using Sub.NETUI.Playback;
 using Sub.NETUI.Subsonic;
 using Sub.NETUI.UI;
@@ -12,7 +13,12 @@ internal static class Program
 {
     private static readonly TimeSpan SessionFlushTimeout = TimeSpan.FromSeconds(3);
 
-    private static async Task<int> Main(string[] args)
+    private static int Main(string[] args) =>
+        OperatingSystem.IsMacOS()
+            ? MacMainThread.Run(() => MainAsync(args))
+            : MainAsync(args).GetAwaiter().GetResult();
+
+    private static async Task<int> MainAsync(string[] args)
     {
         if (args is ["daemon", "stop"])
         {
@@ -42,8 +48,8 @@ internal static class Program
         }
 
         using var httpClient = new HttpClient();
-        using var audioPlayer = new MpvAudioPlayer();
-        using IMediaSession mediaSession = await MprisMediaSession.CreateAsync();
+        using IAudioPlayer audioPlayer = AudioPlayerFactory.Create();
+        using IMediaSession mediaSession = await MediaSessionFactory.CreateAsync();
         var subsonicClient = new SubsonicClient(httpClient, settings!);
         using var playback = new PlaybackController(audioPlayer, new PlaybackQueue(), mediaSession, subsonicClient);
         using var sessionSync = new NavidromeSessionSync(playback, subsonicClient);
@@ -139,9 +145,9 @@ internal static class Program
         SubsonicClient subsonicClient,
         Stack<IDisposable> resources)
     {
-        var audioPlayer = new MpvAudioPlayer();
+        IAudioPlayer audioPlayer = AudioPlayerFactory.Create();
         resources.Push(audioPlayer);
-        IMediaSession mediaSession = await MprisMediaSession.CreateAsync();
+        IMediaSession mediaSession = await MediaSessionFactory.CreateAsync();
         resources.Push(mediaSession);
         var playback = new PlaybackController(audioPlayer, new PlaybackQueue(), mediaSession, subsonicClient);
         resources.Push(playback);
